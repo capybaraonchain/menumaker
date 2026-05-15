@@ -18,20 +18,25 @@ test('generation exhausted remediation is code-specific and retryable', () => {
   assert.ok(plan.actions.some((action) => action.kind === 'retry_generation' && action.requiresConfirmation))
 })
 
-test('repair remediation keeps daily calorie drift context', () => {
-  const [plan] = buildRepairRemediationPlans({
+test('repair remediation keeps daily calorie drift context and targets the affected meal', () => {
+  const [plan, dayPlan] = buildRepairRemediationPlans({
     issuesAfter: [{
       reason: 'daily_calorie_drift',
       message: 'Martes queda lejos del objetivo.',
       dayIndex: 1,
       slot: 'dinner',
+    }, {
+      reason: 'daily_calorie_drift',
+      message: 'Miércoles queda lejos del objetivo.',
+      dayIndex: 2,
     }],
   })
 
   assert.equal(plan?.code, 'daily_calorie_drift')
   assert.equal(plan?.context.dayIndex, 1)
   assert.equal(plan?.context.slot, 'dinner')
-  assert.ok(plan?.actions.some((action) => action.kind === 'regenerate_day'))
+  assert.ok(plan?.actions.some((action) => action.kind === 'regenerate_meal'))
+  assert.ok(dayPlan?.actions.some((action) => action.kind === 'regenerate_day'))
 })
 
 test('failure classifier maps known messages to domain codes', () => {

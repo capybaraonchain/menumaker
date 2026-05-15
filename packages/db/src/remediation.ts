@@ -141,7 +141,7 @@ export function buildGenerationRemediationPlan(input: BuildRemediationInput): Ge
         'Bloquea primero los platos que sí quieras conservar.',
       ],
       actions: [
-        action(input.dayIndex === undefined || input.dayIndex === null ? 'regenerate_week' : 'regenerate_day', input.dayIndex === undefined || input.dayIndex === null ? 'Regenerar semana' : 'Regenerar día'),
+        regenerationAction(input),
       ],
     })
   }
@@ -156,7 +156,7 @@ export function buildGenerationRemediationPlan(input: BuildRemediationInput): Ge
         'Revisa platos bloqueados porque pueden impedir una corrección automática.',
       ],
       actions: [
-        action(input.dayIndex === undefined || input.dayIndex === null ? 'regenerate_week' : 'regenerate_day', input.dayIndex === undefined || input.dayIndex === null ? 'Regenerar semana' : 'Regenerar día'),
+        regenerationAction(input),
       ],
     })
   }
@@ -260,6 +260,12 @@ function action(kind: GenerationRemediationAction['kind'], label: string): Gener
     label,
     requiresConfirmation: kind.startsWith('regenerate') || kind === 'retry_generation' || kind === 'adjust_targets' || kind === 'relax_preferences',
   }
+}
+
+function regenerationAction(input: BuildRemediationInput): GenerationRemediationAction {
+  if (input.dayIndex !== undefined && input.dayIndex !== null && input.slot) return action('regenerate_meal', 'Regenerar comida')
+  if (input.dayIndex !== undefined && input.dayIndex !== null) return action('regenerate_day', 'Regenerar día')
+  return action('regenerate_week', 'Regenerar semana')
 }
 
 function normalize(value: string): string {

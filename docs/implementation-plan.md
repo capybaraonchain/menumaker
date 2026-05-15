@@ -217,6 +217,7 @@ Implement:
 - Job cancellation for queued/running weekly-generation and preview-generation jobs.
 - Code-specific remediation metadata persisted in `generation_jobs.result.remediation` for failed jobs.
 - Repair-issue remediation metadata persisted in menu/job generation settings when bounded repair cannot fully resolve the week.
+- Repair-issue remediation actions that map persisted day/slot context back to targeted regenerate-meal, regenerate-day, or regenerate-week app actions.
 - Guided profile-preference relaxation through the shared app action registry.
 - Retry limit.
 - Failure states.

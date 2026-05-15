@@ -313,6 +313,13 @@ p {
   font-weight: 900;
 }
 
+.compact-action {
+  width: fit-content;
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+}
+
 .job-status {
   color: var(--danger);
   font-size: 0.72rem;

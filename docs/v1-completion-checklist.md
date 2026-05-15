@@ -139,7 +139,9 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Deterministic menu scoring exists.
 - [x] Weekly assembly runs bounded deterministic repair for repetition, daily calorie drift, banned foods, unknown nutrition, and low weekly protein before persistence.
 - [x] Weekly repair traces include structured `RepairRequest` / `RepairResult` telemetry.
-- [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
+- [x] Deterministic targeted regeneration/replacement is bounded.
+- [x] Unresolved repair remediation can regenerate the affected meal, affected day, or week from persisted day/slot context.
+- [x] Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
 - [x] Weekly quality tests cover skeleton coverage, excessive repetition, absurd daily calorie drift, banned-food leakage, unknown nutrition, and hard-constraint repair.
 - [x] Failure states are explicit in domain schemas and job storage.
 - [x] Completed weekly menu is saved as structured rows.
@@ -222,7 +224,8 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.
 - [x] Guided preference-relaxation remediation can remove selected dislikes/prohibited foods through a typed action.
 - [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes.
-- [x] Guided ingredient-mapping, target-editing, fallback-policy, and repair-specific regeneration forms remain deferred.
+- [x] Repair-specific regeneration actions are available from persisted repair notices.
+- [x] Guided target-editing and fallback-policy remediation forms remain deferred.
 
 ## 13. In-App Chat
 

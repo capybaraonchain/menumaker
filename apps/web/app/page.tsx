@@ -580,7 +580,7 @@ function WeekScreen({
         <span>Proteína mín. {menu.target.proteinG}g</span>
         <span>Confianza {menu.target.confidence}</span>
       </section>
-      <GenerationNotice menu={menu} />
+      <GenerationNotice menu={menu} profileId={state.activeProfile?.id} onAction={onAction} />
       <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} compact />
       <div className="day-list">
         {menu.days.map((day) => (
@@ -615,7 +615,15 @@ function WeekScreen({
   )
 }
 
-function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']> }) {
+function GenerationNotice({
+  menu,
+  profileId,
+  onAction,
+}: {
+  menu: NonNullable<AppState['currentMenu']>
+  profileId?: string
+  onAction: (payload: any) => Promise<any>
+}) {
   const settings = menu.generationSettings ?? {}
   const fallbackSlots = Array.isArray(settings.fallbackSlots) ? settings.fallbackSlots : []
   const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { slots?: Record<string, any> } : null
@@ -640,7 +648,7 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
           <strong>Fallback usado</strong>
           <span>{generationSummary ?? `${details}.`}</span>
         </section>
-        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}
+        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} menu={menu} profileId={profileId} onAction={onAction} />)}
       </div>
     )
   }
@@ -656,12 +664,12 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
           <strong>Plan LLM validado</strong>
           <span>{generationSummary ?? details}</span>
         </section>
-        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}
+        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} menu={menu} profileId={profileId} onAction={onAction} />)}
       </div>
     )
   }
   if (repairRemediation.length > 0) {
-    return <div className="notice-stack">{repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}</div>
+    return <div className="notice-stack">{repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} menu={menu} profileId={profileId} onAction={onAction} />)}</div>
   }
   return (
     <section className="generation-notice legacy">
@@ -676,14 +684,48 @@ function repairRemediationPlans(value: unknown): RemediationPlan[] {
   return value.filter((item): item is RemediationPlan => Boolean(item) && typeof item === 'object' && typeof item.title === 'string')
 }
 
-function RemediationNotice({ plan }: { plan: RemediationPlan }) {
+function RemediationNotice({
+  plan,
+  menu,
+  profileId,
+  onAction,
+}: {
+  plan: RemediationPlan
+  menu?: NonNullable<AppState['currentMenu']>
+  profileId?: string
+  onAction?: (payload: any) => Promise<any>
+}) {
+  const repairAction = menu && onAction ? repairActionPayload(plan, menu, profileId) : null
   return (
     <section className={`generation-notice remediation ${plan.severity}`}>
       <strong>{plan.title}</strong>
       <span>{plan.summary}</span>
       {plan.steps.length > 0 && <span>Qué hacer: {plan.steps.slice(0, 2).join(' ')}</span>}
+      {repairAction && (
+        <button className="secondary compact-action" type="button" onClick={() => onAction?.(repairAction.payload)}>
+          <RefreshCw /> {repairAction.label}
+        </button>
+      )}
     </section>
   )
+}
+
+function repairActionPayload(plan: RemediationPlan, menu: NonNullable<AppState['currentMenu']>, profileId?: string): { label: string; payload: any } | null {
+  const action = plan.actions.find((item) => item.kind === 'regenerate_meal' || item.kind === 'regenerate_day' || item.kind === 'regenerate_week')
+  if (!action) return null
+  if (action.kind === 'regenerate_week') {
+    return { label: action.label, payload: { action: 'regenerateWeek', menuId: menu.id, profileId } }
+  }
+  const dayIndex = typeof plan.context?.dayIndex === 'number' ? plan.context.dayIndex : null
+  const day = dayIndex === null ? null : menu.days.find((item) => item.dayIndex === dayIndex)
+  if (!day) return { label: 'Regenerar semana', payload: { action: 'regenerateWeek', menuId: menu.id, profileId } }
+  if (action.kind === 'regenerate_day') {
+    return { label: action.label, payload: { action: 'regenerateDay', dayPlanId: day.id, profileId } }
+  }
+  const slot = typeof plan.context?.slot === 'string' ? plan.context.slot : null
+  const meal = slot ? day.meals.find((item) => item.slot === slot) : null
+  if (!meal) return { label: 'Regenerar día', payload: { action: 'regenerateDay', dayPlanId: day.id, profileId } }
+  return { label: action.label, payload: { action: 'regenerateMeal', menuMealId: meal.id, profileId } }
 }
 
 function generationSummaryText(value: unknown): string | null {
