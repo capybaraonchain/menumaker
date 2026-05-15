@@ -4,6 +4,7 @@ import {
   applyRegenerationPlan,
   applySimilarIngredientReplacements,
   deleteProfile,
+  enqueueWeeklyMenuGenerationJob,
   getAppState,
   lockDay,
   lockMeal,
@@ -12,6 +13,7 @@ import {
   previewRegenerateWeekPlan,
   replaceMeal,
   retryGenerationJob,
+  runGenerationJob,
   saveProfilePreference,
   starRecipe,
   suggestMealReplacements,
@@ -117,6 +119,14 @@ export const appActionSchemas = {
     exportBeforeDelete: z.boolean().default(true),
   }),
   retryGenerationJob: z.object({
+    profileId: uuid.optional(),
+    jobId: uuid,
+  }),
+  startWeeklyMenuGeneration: z.object({
+    profileId: uuid,
+    runNow: z.boolean().default(true),
+  }),
+  runGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
   }),
@@ -433,6 +443,47 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  startWeeklyMenuGeneration: {
+    name: 'startWeeklyMenuGeneration',
+    inputSchema: appActionSchemas.startWeeklyMenuGeneration,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.start_weekly_generation',
+    confirmationCopyEs: () => 'Se creará un trabajo de generación semanal con el objetivo macro actual. ¿Continuar?',
+    successCopyEs: (_, result) => {
+      const ran = result && typeof result === 'object' && Boolean((result as { menu?: unknown }).menu)
+      return ran ? 'Listo. Creé el trabajo y generé una nueva semana.' : 'Listo. Dejé el trabajo de generación en cola.'
+    },
+    async execute(input) {
+      const job = await enqueueWeeklyMenuGenerationJob(input.profileId)
+      if (!input.runNow) {
+        return {
+          job,
+          state: await appStateResult(input.profileId),
+        }
+      }
+      const menu = await runGenerationJob(job.id)
+      return {
+        job,
+        menu,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  runGenerationJob: {
+    name: 'runGenerationJob',
+    inputSchema: appActionSchemas.runGenerationJob,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.run_generation_job',
+    confirmationCopyEs: () => 'Se ejecutará este trabajo de generación y puede crear un menú nuevo. ¿Continuar?',
+    successCopyEs: () => 'Listo. Ejecuté el trabajo de generación.',
+    async execute(input) {
+      const menu = await runGenerationJob(input.jobId)
+      return {
+        menu,
+        state: await appStateResult(input.profileId ?? menu.profileId),
+      }
+    },
+  },
 }
 
 export async function executeAppAction<Name extends AppActionName>(
@@ -632,6 +683,8 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'applySimilarReplacements') return 'Aplicar similares'
   if (name === 'deleteProfile') return 'Eliminar perfil'
   if (name === 'retryGenerationJob') return 'Reintentar generación'
+  if (name === 'startWeeklyMenuGeneration') return 'Generar semana'
+  if (name === 'runGenerationJob') return 'Ejecutar generación'
   return 'Continuar'
 }
 

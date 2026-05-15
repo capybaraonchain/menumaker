@@ -155,8 +155,16 @@ export interface GenerationJobView {
 
 export interface RetryGenerationJobResult {
   retriedJobId: string
+  newJobId: string
   retryOfKind: string
   menu: WeeklyMenuView
+}
+
+interface WeeklyMenuGenerationJobInput {
+  profileId: string
+  macroTargetId: string
+  target: MacroTargets
+  kind: string
 }
 
 export interface ProfileDeletionExport {
@@ -648,40 +656,81 @@ export async function saveMacroTarget(profileId: string, targets: MacroTargets):
 }
 
 export async function createWeeklyMenu(profileId: string, targetId?: string, targets?: MacroTargets, kind = 'weekly_generation'): Promise<WeeklyMenuView> {
+  const job = await enqueueWeeklyMenuGenerationJob(profileId, targetId, targets, kind)
+  return runGenerationJob(job.id)
+}
+
+export async function enqueueWeeklyMenuGenerationJob(profileId: string, targetId?: string, targets?: MacroTargets, kind = 'weekly_generation'): Promise<GenerationJobView> {
   const sql = sqlClient()
   const profile = (await listProfiles()).find((item) => item.id === profileId)
   if (!profile) throw new Error('Perfil no encontrado.')
   const target = targets ?? profile.latestTarget
   if (!target) throw new Error('El perfil no tiene objetivos de macros.')
   const macroTargetId = targetId ?? (await saveMacroTarget(profileId, target))
-
-  const [job] = await sql<[{ id: string }]>`
+  const input: WeeklyMenuGenerationJobInput = {
+    profileId,
+    macroTargetId,
+    target,
+    kind,
+  }
+  const [job] = await sql`
     insert into generation_jobs (user_id, profile_id, status, kind, logs, result)
-    values (${localUserId()}, ${profileId}, 'running', ${kind}, ${sql.json(['Construyendo semana'] as any)}, '{}')
-    returning id
+    values (${localUserId()}, ${profileId}, 'queued', ${kind}, ${sql.json(['En cola'] as any)}, ${sql.json({ jobInput: input } as any)})
+    returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+  `
+  if (!job) throw new Error('No se pudo crear el trabajo de generación.')
+  return generationJobFromRow(job)
+}
+
+export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select id, profile_id, status, kind, result
+    from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (!job) throw new Error('Trabajo de generación no encontrado.')
+  if (job.status === 'completed') {
+    const [completed] = await sql`select weekly_menu_id from generation_jobs where id = ${jobId} and user_id = ${localUserId()}`
+    if (completed?.weekly_menu_id) return getWeeklyMenu(completed.weekly_menu_id)
+    throw new Error('El trabajo está completado pero no tiene menú asociado.')
+  }
+  if (job.status !== 'queued' && job.status !== 'failed') {
+    throw new Error(`No se puede ejecutar un trabajo en estado ${job.status}.`)
+  }
+  const input = weeklyMenuJobInputFromResult(job.result)
+  const profile = (await listProfiles()).find((item) => item.id === input.profileId)
+  if (!profile) throw new Error('Perfil no encontrado para el trabajo de generación.')
+  await sql`
+    update generation_jobs
+    set status = 'running',
+      logs = ${sql.json(['En cola', 'Construyendo semana'] as any)},
+      error = null,
+      failure_code = null,
+      updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()}
   `
 
   let weekRecipes: Awaited<ReturnType<typeof buildRecipesForWeek>>
   try {
-    weekRecipes = await buildRecipesForWeek(profile, target)
+    weekRecipes = await buildRecipesForWeek(profile, input.target)
   } catch (error) {
-    if (job) {
-      await sql`
-        update generation_jobs set status = 'failed',
-          failure_code = 'generation_exhausted',
-          logs = ${sql.json(['Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
-          error = ${error instanceof Error ? error.message : String(error)},
-          updated_at = now()
-        where id = ${job.id}
-      `
-    }
+    await sql`
+      update generation_jobs set status = 'failed',
+        failure_code = 'generation_exhausted',
+        logs = ${sql.json(['En cola', 'Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
+        error = ${error instanceof Error ? error.message : String(error)},
+        updated_at = now()
+      where id = ${jobId} and user_id = ${localUserId()}
+    `
     throw error
   }
 
   const [menu] = await sql<[{ id: string }]>`
     insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
-    values (${localUserId()}, ${profileId}, ${macroTargetId}, ${currentWeekStart()}, ${profile.locale}, 'completed', ${sql.json({
-      kind,
+    values (${localUserId()}, ${input.profileId}, ${input.macroTargetId}, ${currentWeekStart()}, ${profile.locale}, 'completed', ${sql.json({
+      kind: input.kind,
+      generationJobId: jobId,
       recipeSource: weekRecipes.source,
       fallbackSlots: weekRecipes.fallbackSlots,
       fallbackAllowed: weekRecipes.trace.fallbackAllowed,
@@ -715,28 +764,28 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
 
   const weeklyNutrition = sumNutrition(dayNutrition)
   await sql`update weekly_menus set nutrition_snapshot = ${sql.json(weeklyNutrition as any)} where id = ${menu.id}`
-  if (job) {
-    await sql`
-      update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
-        logs = ${sql.json([
-          'Construyendo semana',
-          weekRecipes.skeletonTrace.fallbackUsed ? 'Usando esqueleto semanal determinístico' : 'Generando esqueleto semanal con LLM',
-          weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
-          weekRecipes.repair.attempted ? 'Reparando selección semanal' : 'Validando calidad semanal',
-          'Calculando nutrición',
-          'Finalizando',
-        ] as any)},
-        result = ${sql.json({
-          menuId: menu.id,
-          recipeSource: weekRecipes.source,
-          fallbackSlots: weekRecipes.fallbackSlots,
-          weekSkeletonTrace: weekRecipes.skeletonTrace,
-          repair: weekRecipes.repair,
-          trace: weekRecipes.trace,
-        } as any)}, updated_at = now()
-      where id = ${job.id}
-    `
-  }
+  await sql`
+    update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
+      logs = ${sql.json([
+        'En cola',
+        'Construyendo semana',
+        weekRecipes.skeletonTrace.fallbackUsed ? 'Usando esqueleto semanal determinístico' : 'Generando esqueleto semanal con LLM',
+        weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
+        weekRecipes.repair.attempted ? 'Reparando selección semanal' : 'Validando calidad semanal',
+        'Calculando nutrición',
+        'Finalizando',
+      ] as any)},
+      result = ${sql.json({
+        jobInput: input,
+        menuId: menu.id,
+        recipeSource: weekRecipes.source,
+        fallbackSlots: weekRecipes.fallbackSlots,
+        weekSkeletonTrace: weekRecipes.skeletonTrace,
+        repair: weekRecipes.repair,
+        trace: weekRecipes.trace,
+      } as any)}, updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
   return getWeeklyMenu(menu.id)
 }
 
@@ -856,19 +905,39 @@ export async function retryGenerationJob(jobId: string): Promise<RetryGeneration
   if (!profile) throw new Error('Perfil no encontrado para reintentar la generación.')
   if (!profile.latestTarget) throw new Error('El perfil no tiene objetivos de macros para reintentar la generación.')
 
+  const retryJob = await enqueueWeeklyMenuGenerationJob(profile.id, undefined, profile.latestTarget, `retry_${String(job.kind).slice(0, 48)}`)
   await sql`
     update generation_jobs
     set retry_count = retry_count + 1,
-      result = coalesce(result, '{}'::jsonb) || ${sql.json({ retriedAt: new Date().toISOString() } as any)}::jsonb,
+      result = coalesce(result, '{}'::jsonb) || ${sql.json({ retriedAt: new Date().toISOString(), retriedByJobId: retryJob.id } as any)}::jsonb,
       updated_at = now()
     where id = ${jobId} and user_id = ${localUserId()}
   `
-  const menu = await createWeeklyMenu(profile.id, undefined, profile.latestTarget, `retry_${String(job.kind).slice(0, 48)}`)
+  const menu = await runGenerationJob(retryJob.id)
   return {
     retriedJobId: jobId,
+    newJobId: retryJob.id,
     retryOfKind: String(job.kind),
     menu,
   }
+}
+
+function weeklyMenuJobInputFromResult(result: unknown): WeeklyMenuGenerationJobInput {
+  const candidate = result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as { jobInput?: Partial<WeeklyMenuGenerationJobInput> }).jobInput
+    : null
+  if (
+    candidate &&
+    typeof candidate.profileId === 'string' &&
+    typeof candidate.macroTargetId === 'string' &&
+    typeof candidate.kind === 'string' &&
+    candidate.target &&
+    typeof candidate.target === 'object' &&
+    typeof (candidate.target as Partial<MacroTargets>).calories === 'number'
+  ) {
+    return candidate as WeeklyMenuGenerationJobInput
+  }
+  throw new Error('El trabajo no contiene input de generación semanal.')
 }
 
 async function countRows(query: Promise<Array<{ count: number | string }>>): Promise<number> {

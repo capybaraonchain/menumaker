@@ -135,13 +135,17 @@ Preferred flow:
 
 1. User starts generation.
 2. App creates a `generation_jobs` row.
-3. Server generates candidate meals.
-4. Nutrition layer validates recipe ingredients and nutrition totals.
-5. Planner repairs or rebalances the menu.
-6. UI polls or subscribes to job status.
-7. Completed menu is saved as structured rows.
+3. The job stores the generation input snapshot, including profile, macro target, kind, and macro target id.
+4. A runner claims the queued job and changes it to running.
+5. Server generates candidate meals.
+6. Nutrition layer validates recipe ingredients and nutrition totals.
+7. Planner repairs or rebalances the menu.
+8. UI polls or subscribes to job status.
+9. Completed menu is saved as structured rows and linked back to the job.
 
 Meal, day, and week regeneration should use the same job model. Locked meals and locked days must be preserved.
+
+Local v1 may call the runner immediately after enqueueing the job so the app remains simple on a MacBook. The enqueue/run boundary still exists so a background worker or hosted queue can take over later without rewriting the planner.
 
 ## MCP Server
 

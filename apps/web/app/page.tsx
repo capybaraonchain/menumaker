@@ -493,6 +493,11 @@ function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state
       <div className="week-screen">
         <GenerationJobsPanel jobs={state.generationJobs} profileId={state.activeProfile?.id} onAction={onAction} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
+        {state.activeProfile?.latestTarget && (
+          <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
+            <Sparkles /> Generar semana
+          </button>
+        )}
       </div>
     )
   }

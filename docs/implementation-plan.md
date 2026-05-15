@@ -206,6 +206,8 @@ Schemas:
 Implement:
 
 - Generation job creation.
+- Queued weekly-generation job input persisted in `generation_jobs.result.jobInput`.
+- A reusable weekly-generation runner that claims a queued job and produces the menu.
 - Job state transitions.
 - Job logs.
 - Retry limit.
@@ -221,6 +223,7 @@ Implement:
 Acceptance:
 
 - A generation job can move through queued, running, completed, and failed states.
+- Weekly generation can be enqueued separately from execution, even though local v1 may run the job immediately.
 - Failures are represented with explicit codes.
 - Structured outputs are validated before use.
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.

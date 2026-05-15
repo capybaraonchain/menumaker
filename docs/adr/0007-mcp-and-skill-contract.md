@@ -47,6 +47,7 @@ Read-only tools:
 - `get_recipe`
 - `get_saved_recipes`
 - `get_menu_history`
+- `get_generation_jobs`
 - `analyze_recipe_nutrition`
 - `explain_macro_targets`
 
@@ -70,6 +71,8 @@ Mutation tools:
 - `create_profile`
 - `update_profile`
 - `save_macro_targets`
+- `enqueue_weekly_menu_generation`
+- `run_generation_job`
 - `start_weekly_menu_generation`
 - `replace_meal`
 - `apply_confirmed_replacements`
@@ -84,6 +87,7 @@ Mutation tools:
 - `save_profile_preference`
 - `apply_calorie_target_change`
 - `delete_profile`
+- `retry_generation_job`
 
 ## Confirmation Rules
 
@@ -192,6 +196,9 @@ The companion skill should instruct agents to:
 - Use deterministic nutrition analysis before macro claims.
 - Ask for confirmation before profile-wide or week-wide changes.
 - Treat generated menus and regenerations as async jobs.
+- Use `enqueue_weekly_menu_generation` when an external agent should create a queued job without blocking on the full planner.
+- Use `run_generation_job` to execute a queued weekly-generation job after confirmation.
+- Use `start_weekly_menu_generation` only when the user explicitly wants enqueue-and-run in one step.
 - Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
 - Use `retry_generation_job` only for failed generation jobs and only after explicit confirmation.
 - Explain impossible targets by showing the calorie conflict between protein, minimum fat, and calorie target.

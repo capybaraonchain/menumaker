@@ -11,7 +11,7 @@ import {
   confirmPendingAction,
   createPendingAction,
   createProfileAndFirstMenu,
-  createWeeklyMenu,
+  enqueueWeeklyMenuGenerationJob,
   executeAppAction,
   getAppState,
   getCurrentMenu,
@@ -27,6 +27,7 @@ import {
   previewRegenerateMealPlan,
   previewRegenerateWeekPlan,
   replaceMeal,
+  runGenerationJob,
   saveMacroTarget,
   saveProfilePreference,
   starRecipe,
@@ -54,6 +55,8 @@ const pendingActionNames = [
   'applySimilarReplacements',
   'deleteProfile',
   'retryGenerationJob',
+  'startWeeklyMenuGeneration',
+  'runGenerationJob',
 ] as const
 
 function json(value: unknown) {
@@ -579,18 +582,41 @@ server.registerTool(
 )
 
 server.registerTool(
+  'enqueue_weekly_menu_generation',
+  {
+    description: 'Mutation: create a queued weekly menu generation job for a profile without running it. Requires confirmed=true.',
+    inputSchema: { profileId: z.string().uuid(), confirmed: z.boolean() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, confirmed }) => {
+    requireConfirmation(confirmed, 'enqueue weekly menu generation')
+    return json(await enqueueWeeklyMenuGenerationJob(profileId))
+  },
+)
+
+server.registerTool(
+  'run_generation_job',
+  {
+    description: 'Mutation: run a queued or failed weekly generation job and return the generated menu. Requires confirmed=true.',
+    inputSchema: { jobId: z.string().uuid(), confirmed: z.boolean() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ jobId, confirmed }) => {
+    requireConfirmation(confirmed, 'run generation job')
+    return json(await runGenerationJob(jobId))
+  },
+)
+
+server.registerTool(
   'start_weekly_menu_generation',
   {
-    description: 'Mutation: generate a new weekly menu for a profile. Requires confirmed=true.',
+    description: 'Mutation: enqueue and immediately run a weekly menu generation job for a profile. Requires confirmed=true.',
     inputSchema: { profileId: z.string().uuid(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
   async ({ profileId, confirmed }) => {
     requireConfirmation(confirmed, 'weekly menu generation')
-    const profiles = await listProfiles()
-    const profile = profiles.find((item) => item.id === profileId)
-    if (!profile?.latestTarget) throw new Error('Profile or macro target not found.')
-    return json(await createWeeklyMenu(profileId, undefined, profile.latestTarget, 'mcp_generation'))
+    return json(await executeAppAction('startWeeklyMenuGeneration', { profileId, runNow: true }, 'mcp'))
   },
 )
 

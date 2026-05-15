@@ -189,10 +189,13 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation still executes synchronously inside requests, but persisted generation jobs are now first-class state. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full worker queues, streaming progress, and cancellation remain deferred.
+Local v1 generation still executes inside requests by default, but weekly generation is now job-owned: the app creates a queued `generation_jobs` row with serialized generation input, then a reusable runner moves the job to running and completed/failed. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full background worker queues, streaming progress, and cancellation remain deferred.
 
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
+- [x] Weekly generation can be enqueued without immediate execution.
+- [x] Weekly generation has a reusable runner that executes a queued job.
+- [x] MCP exposes enqueue and run tools for weekly generation jobs.
 - [x] Semana shows failed/running jobs instead of hiding them in database logs.
 - [x] Historial shows generation jobs alongside stored menus.
 - [x] Failed jobs can be retried through a typed action.
