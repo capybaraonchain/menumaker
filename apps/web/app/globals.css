@@ -415,6 +415,18 @@ p {
   line-height: 1.25;
 }
 
+.inline-source-create {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf1;
+  padding: 10px 12px;
+}
+
+.inline-source-create summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
 .day-section {
   border-top: 1px solid var(--line);
   padding-top: 16px;

@@ -151,4 +151,6 @@ test('ingredient remediation searches source-backed nutrition foods through shar
   assert.match(apiRoute, /searchNutritionFoods: 'searchNutritionFoods'/)
   assert.match(webPage, /action: 'searchNutritionFoods'/)
   assert.match(webPage, /Buscar alimento determinístico/)
+  assert.match(webPage, /Crear alimento local desde este problema/)
+  assert.match(webPage, /action: 'createUserNutritionFood'/)
 })

@@ -256,6 +256,7 @@ Acceptance:
 - Impossible-target failures can open a guided target-edit modal that saves revised macro targets and starts a new weekly generation through `updateMacroTargetAndGenerate`.
 - Low-confidence or ambiguous-ingredient failures can save a mapping and retry the generation without bypassing deterministic nutrition.
 - Ingredient remediation can search the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
+- Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
 
 ## Phase 6: Weekly Menu Planning Pipeline

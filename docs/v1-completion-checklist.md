@@ -230,6 +230,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Low nutrition confidence failure includes persisted remediation steps.
 - [x] Ambiguous ingredient failure includes persisted remediation steps.
 - [x] Low nutrition confidence and ambiguous ingredient remediation can open a guided alias-mapping flow.
+- [x] Guided ingredient remediation can create a missing custom food inline before saving an alias.
 - [x] Banned-item conflict failure includes persisted remediation steps.
 - [x] Generation-exhausted failure includes retry and persisted remediation steps.
 - [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.

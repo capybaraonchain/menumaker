@@ -1034,6 +1034,14 @@ function IngredientMappingModal({
   const [canonicalFoodName, setCanonicalFoodName] = useState(foods[0]?.name ?? '')
   const [searchQuery, setSearchQuery] = useState(ingredientNameFromRemediation(plan, job))
   const [searchResults, setSearchResults] = useState<MappableFood[]>([])
+  const [showCreateFood, setShowCreateFood] = useState(false)
+  const [customName, setCustomName] = useState(ingredientNameFromRemediation(plan, job))
+  const [customCategory, setCustomCategory] = useState('custom')
+  const [customCalories, setCustomCalories] = useState('')
+  const [customProtein, setCustomProtein] = useState('')
+  const [customCarbs, setCustomCarbs] = useState('')
+  const [customFat, setCustomFat] = useState('')
+  const [customFiber, setCustomFiber] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [localBusy, setLocalBusy] = useState<string | null>(null)
   const currentOptions = searchResults.length > 0 ? searchResults : foods.slice(0, 25)
@@ -1059,6 +1067,49 @@ function IngredientMappingModal({
       if (nextResults.length === 0) setError('No encontré alimentos determinísticos para esa búsqueda. Importa una fuente o crea un alimento local.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo buscar en fuentes nutricionales.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
+
+  async function createInlineFood() {
+    const calories = Number(customCalories)
+    const proteinG = Number(customProtein)
+    const carbsG = Number(customCarbs)
+    const fatG = Number(customFat)
+    const fiberG = customFiber.trim() ? Number(customFiber) : undefined
+    if (!customName.trim() || [calories, proteinG, carbsG, fatG].some((value) => !Number.isFinite(value) || value < 0) || (fiberG !== undefined && (!Number.isFinite(fiberG) || fiberG < 0))) {
+      setError('Completa nombre y macros por 100g con números válidos.')
+      return
+    }
+    setError(null)
+    setLocalBusy('createFood')
+    try {
+      const result = await onAction({
+        action: 'createUserNutritionFood',
+        profileId: profile.id,
+        canonicalName: customName.trim(),
+        category: customCategory.trim() || 'custom',
+        aliases: uniqueStrings([customName.trim(), ingredientName.trim()]),
+        per100g: { calories, proteinG, carbsG, fatG, fiberG },
+        householdUnits: [],
+      }) as { food?: MappableFood }
+      if (result.food) {
+        setSearchResults((items) => [result.food!, ...items.filter((item) => item.id !== result.food!.id)])
+        setCanonicalFoodName(result.food.name)
+        setSearchQuery(result.food.name)
+      } else {
+        setCanonicalFoodName(customName.trim())
+        setSearchQuery(customName.trim())
+      }
+      setShowCreateFood(false)
+      setCustomCalories('')
+      setCustomProtein('')
+      setCustomCarbs('')
+      setCustomFat('')
+      setCustomFiber('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo crear el alimento local.')
     } finally {
       setLocalBusy(null)
     }
@@ -1133,6 +1184,26 @@ function IngredientMappingModal({
             ))}
           </div>
         )}
+        <details className="inline-source-create" open={showCreateFood} onToggle={(event) => setShowCreateFood(event.currentTarget.open)}>
+          <summary>Crear alimento local desde este problema</summary>
+          <div className="source-form">
+            <label>Nombre<input value={customName} onChange={(event) => setCustomName(event.target.value)} placeholder="queso fresco batido" /></label>
+            <div className="source-grid">
+              <label>Categoría<input value={customCategory} onChange={(event) => setCustomCategory(event.target.value)} /></label>
+              <label>Alias confirmado<input value={ingredientName} disabled /></label>
+            </div>
+            <div className="source-grid macros">
+              <label>kcal<input value={customCalories} inputMode="decimal" onChange={(event) => setCustomCalories(event.target.value)} /></label>
+              <label>Proteína<input value={customProtein} inputMode="decimal" onChange={(event) => setCustomProtein(event.target.value)} /></label>
+              <label>Carbos<input value={customCarbs} inputMode="decimal" onChange={(event) => setCustomCarbs(event.target.value)} /></label>
+              <label>Grasa<input value={customFat} inputMode="decimal" onChange={(event) => setCustomFat(event.target.value)} /></label>
+              <label>Fibra<input value={customFiber} inputMode="decimal" onChange={(event) => setCustomFiber(event.target.value)} /></label>
+            </div>
+            <button className="secondary" type="button" disabled={localBusy !== null} onClick={createInlineFood}>
+              <Save size={16} /> {localBusy === 'createFood' ? 'Creando...' : 'Crear y seleccionar'}
+            </button>
+          </div>
+        </details>
         <p className="muted">Esto guarda un alias confirmado y el scorer lo usará en generaciones, reemplazos y análisis nutricional.</p>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
@@ -1726,6 +1797,10 @@ function chatActionSuccessText(action: ChatAction): string {
 
 function splitList(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
 function parsePositiveIntegers(value: string): number[] {
