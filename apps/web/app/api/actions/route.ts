@@ -13,6 +13,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   adjustCaloriesAndRegenerateWeek: 'applyCalorieTargetChange',
   applySimilarReplacements: 'applySimilarReplacements',
   cancelGenerationJob: 'cancelGenerationJob',
+  processQueuedGenerationJobs: 'processQueuedGenerationJobs',
   deleteProfile: 'deleteProfile',
   enqueuePreviewGenerationJob: 'enqueuePreviewGenerationJob',
   lockDay: 'lockDay',

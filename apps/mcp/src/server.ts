@@ -60,6 +60,7 @@ const pendingActionNames = [
   'applySimilarReplacements',
   'deleteProfile',
   'retryGenerationJob',
+  'processQueuedGenerationJobs',
   'relaxProfilePreferences',
   'updateMacroTargetAndGenerate',
   'startWeeklyMenuGeneration',
@@ -309,6 +310,23 @@ server.registerTool(
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
   async ({ profileId, jobId }) => json(await executeAppAction('cancelGenerationJob', { profileId, jobId }, 'mcp')),
+)
+
+server.registerTool(
+  'process_generation_queue',
+  {
+    description: 'Mutation: run the local generation worker for queued weekly or preview jobs. Can create menus or saved preview plans. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid().optional(),
+      limit: z.number().int().positive().max(10).default(1),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, limit, confirmed }) => {
+    requireConfirmation(confirmed, 'process generation queue')
+    return json(await executeAppAction('processQueuedGenerationJobs', { profileId, limit }, 'mcp'))
+  },
 )
 
 server.registerTool(

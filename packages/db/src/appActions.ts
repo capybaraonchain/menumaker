@@ -17,6 +17,7 @@ import {
   replaceMeal,
   resetLocalData,
   retryGenerationJob,
+  runQueuedGenerationJobs,
   runPreviewGenerationJob,
   runGenerationJob,
   saveIngredientMapping,
@@ -143,6 +144,10 @@ export const appActionSchemas = {
   cancelGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
+  }),
+  processQueuedGenerationJobs: z.object({
+    profileId: uuid.optional(),
+    limit: z.number().int().positive().max(10).default(1),
   }),
   relaxProfilePreferences: z.object({
     profileId: uuid,
@@ -567,6 +572,29 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       return {
         ...result,
         state: await appStateResult(input.profileId ?? result.job.profileId ?? undefined),
+      }
+    },
+  },
+  processQueuedGenerationJobs: {
+    name: 'processQueuedGenerationJobs',
+    inputSchema: appActionSchemas.processQueuedGenerationJobs,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.process_queued_generation_jobs',
+    confirmationCopyEs: (input) => `Se procesarán hasta **${input.limit}** trabajo(s) en cola con el worker local. Puede crear menús o planes de previsualización. ¿Continuar?`,
+    successCopyEs: (_, result) => {
+      const completed = result && typeof result === 'object' && typeof (result as { completed?: unknown }).completed === 'number'
+        ? (result as { completed: number }).completed
+        : 0
+      const failed = result && typeof result === 'object' && typeof (result as { failed?: unknown }).failed === 'number'
+        ? (result as { failed: number }).failed
+        : 0
+      return `Listo. Worker local: ${completed} completado(s), ${failed} fallido(s).`
+    },
+    async execute(input) {
+      const result = await runQueuedGenerationJobs(input.limit, input.profileId)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId),
       }
     },
   },

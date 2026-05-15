@@ -804,6 +804,7 @@ function GenerationJobsPanel({
   const visibleJobs = jobs
     .filter((job) => job.status === 'failed' || job.status === 'running' || job.status === 'queued')
     .slice(0, compact ? 2 : 6)
+  const queuedJobs = visibleJobs.filter((job) => job.status === 'queued')
   if (visibleJobs.length === 0) return null
   return (
     <section className="job-panel">
@@ -813,6 +814,11 @@ function GenerationJobsPanel({
           <strong>{visibleJobs.some((job) => job.status === 'failed') ? 'Generación necesita atención' : 'Generación en curso'}</strong>
           <small>Estado persistido del trabajo, no un mensaje genérico.</small>
         </div>
+        {queuedJobs.length > 0 && (
+          <button className="secondary compact-action" type="button" onClick={() => onAction({ action: 'processQueuedGenerationJobs', profileId, limit: 1 })}>
+            <RefreshCw /> Procesar cola
+          </button>
+        )}
       </header>
       <div className="job-list">
         {visibleJobs.map((job) => (

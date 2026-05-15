@@ -1517,13 +1517,14 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
   }
 }
 
-export async function runQueuedGenerationJobs(limit = 1): Promise<GenerationWorkerResult> {
+export async function runQueuedGenerationJobs(limit = 1, profileId?: string): Promise<GenerationWorkerResult> {
   const sql = sqlClient()
   const batchSize = Math.max(1, Math.min(10, Math.round(limit)))
   const rows = await sql<Array<{ id: string; kind: string }>>`
     select id, kind
     from generation_jobs
     where user_id = ${localUserId()} and status = 'queued'
+      and (${profileId ?? null}::uuid is null or profile_id = ${profileId ?? null})
     order by created_at asc
     limit ${batchSize}
   `
