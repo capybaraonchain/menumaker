@@ -525,22 +525,36 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
   const settings = menu.generationSettings ?? {}
   const fallbackSlots = Array.isArray(settings.fallbackSlots) ? settings.fallbackSlots : []
   const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { slots?: Record<string, any> } : null
+  const skeletonTrace = settings.weekSkeletonTrace && typeof settings.weekSkeletonTrace === 'object' ? settings.weekSkeletonTrace as Record<string, any> : null
+  const repair = settings.repair && typeof settings.repair === 'object' ? settings.repair as { attempted?: boolean; actions?: unknown[]; repaired?: boolean } : null
   const slotTraces = Object.values(trace?.slots ?? {})
   const cacheHits = slotTraces.filter((item) => item?.cacheHit).length
   const source = String(settings.recipeSource ?? '')
-  if (fallbackSlots.length > 0) {
+  const skeletonFallback = Boolean(skeletonTrace?.fallbackUsed)
+  const repairActions = Array.isArray(repair?.actions) ? repair.actions.length : 0
+  if (fallbackSlots.length > 0 || skeletonFallback) {
+    const details = [
+      skeletonFallback ? 'esqueleto semanal determinístico' : null,
+      fallbackSlots.length > 0 ? `plantillas en ${fallbackSlots.map((slot) => slotLabels[String(slot)] ?? String(slot)).join(', ')}` : null,
+      repairActions > 0 ? `${repairActions} reparación(es) de selección` : null,
+    ].filter(Boolean).join('; ')
     return (
       <section className="generation-notice warning">
         <strong>Fallback usado</strong>
-        <span>Se usaron plantillas determinísticas en {fallbackSlots.map((slot) => slotLabels[String(slot)] ?? String(slot)).join(', ')}.</span>
+        <span>{details}.</span>
       </section>
     )
   }
-  if (source === 'llm' || cacheHits > 0) {
+  if (source === 'llm' || cacheHits > 0 || skeletonTrace?.providerSource === 'llm') {
+    const details = [
+      skeletonTrace?.providerSource === 'llm' ? 'Esqueleto semanal LLM.' : null,
+      cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Nutrición calculada con datos determinísticos.',
+      repairActions > 0 ? `${repairActions} reparación(es) de selección aplicadas.` : null,
+    ].filter(Boolean).join(' ')
     return (
       <section className="generation-notice">
-        <strong>Recetas LLM validadas</strong>
-        <span>{cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Nutrición calculada con datos determinísticos.'}</span>
+        <strong>Plan LLM validado</strong>
+        <span>{details}</span>
       </section>
     )
   }

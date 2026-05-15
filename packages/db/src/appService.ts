@@ -2,8 +2,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   codexStatus,
   generateRecipeCandidates,
+  generateWeekSkeleton,
   type RecipeGenerationInput,
   type RecipeGenerationResult,
+  type WeekSkeletonGenerationInput,
+  type WeekSkeletonGenerationResult,
 } from '@menumaker/ai'
 import {
   calculateMacroTargets,
@@ -20,6 +23,8 @@ import {
   type OnboardingInput,
   type RecipeCandidate,
   type Sex,
+  type WeekSkeleton,
+  type WeekSkeletonMeal,
 } from '@menumaker/core'
 import { normalizeIngredientName, scoreRecipe, seedFoods, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
 import {
@@ -285,7 +290,45 @@ interface RecipePoolTrace {
   error?: string
 }
 
+interface WeekSkeletonTrace {
+  providerConfigured: boolean
+  providerSource: WeekSkeletonGenerationResult['source']
+  cacheHit: boolean
+  fallbackAllowed: boolean
+  fallbackUsed: boolean
+  fallbackReason: 'none' | 'provider_unavailable' | 'provider_failed'
+  error?: string
+}
+
+interface WeekRepairIssue {
+  reason: 'repetition_conflict' | 'daily_calorie_drift' | 'weekly_protein_low'
+  dayIndex?: number
+  slot?: MealSlot
+  title?: string
+  message: string
+}
+
+interface WeekRepairAction {
+  attempt: number
+  reason: WeekRepairIssue['reason']
+  dayIndex: number
+  slot: MealSlot
+  previousTitle: string
+  nextTitle: string
+  delta: NutritionTotals
+}
+
+interface WeekRepairTrace {
+  attempted: boolean
+  maxAttempts: number
+  issuesBefore: WeekRepairIssue[]
+  actions: WeekRepairAction[]
+  issuesAfter: WeekRepairIssue[]
+  repaired: boolean
+}
+
 const RECIPE_GENERATION_SCHEMA_VERSION = 'menumaker_recipe_candidates:v1'
+const WEEK_SKELETON_SCHEMA_VERSION = 'menumaker_week_skeleton:v1'
 
 const replacementSlotShares: Record<MealSlot, number> = {
   breakfast: 0.23,
@@ -603,7 +646,7 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
       await sql`
         update generation_jobs set status = 'failed',
           failure_code = 'generation_exhausted',
-          logs = ${sql.json(['Construyendo semana', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
+          logs = ${sql.json(['Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
           error = ${error instanceof Error ? error.message : String(error)},
           updated_at = now()
         where id = ${job.id}
@@ -619,6 +662,9 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
       recipeSource: weekRecipes.source,
       fallbackSlots: weekRecipes.fallbackSlots,
       fallbackAllowed: weekRecipes.trace.fallbackAllowed,
+      weekSkeleton: weekRecipes.skeleton,
+      weekSkeletonTrace: weekRecipes.skeletonTrace,
+      repair: weekRecipes.repair,
       trace: weekRecipes.trace,
     } as any)}, '{}')
     returning id
@@ -651,7 +697,9 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
       update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
         logs = ${sql.json([
           'Construyendo semana',
+          weekRecipes.skeletonTrace.fallbackUsed ? 'Usando esqueleto semanal determinístico' : 'Generando esqueleto semanal con LLM',
           weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
+          weekRecipes.repair.attempted ? 'Reparando selección semanal' : 'Validando calidad semanal',
           'Calculando nutrición',
           'Finalizando',
         ] as any)},
@@ -659,6 +707,8 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
           menuId: menu.id,
           recipeSource: weekRecipes.source,
           fallbackSlots: weekRecipes.fallbackSlots,
+          weekSkeletonTrace: weekRecipes.skeletonTrace,
+          repair: weekRecipes.repair,
           trace: weekRecipes.trace,
         } as any)}, updated_at = now()
       where id = ${job.id}
@@ -1457,13 +1507,21 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>
   source: 'llm' | 'template' | 'mixed'
   fallbackSlots: MealSlot[]
+  skeleton: WeekSkeleton
+  skeletonTrace: WeekSkeletonTrace
+  repair: WeekRepairTrace
   trace: {
     fallbackAllowed: boolean
     slots: Record<MealSlot, RecipePoolTrace>
   }
 }> {
+  const skeletonResult = await buildWeekSkeleton(profile, targets)
   const pools = new Map<MealSlot, RecipePoolResult>()
   for (const slot of mealSlots) {
+    const slotSkeleton = skeletonResult.skeleton.days.map((day) => ({
+      dayIndex: day.dayIndex,
+      meal: skeletonMeal(day, slot),
+    }))
     pools.set(slot, await recipePoolForSlot({
       profile,
       slot,
@@ -1471,9 +1529,15 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
       avoidFoods: profileAvoidedFoods(profile),
       avoidTitles: [],
       targetNutrition: targetNutritionForSlot(targets, slot),
-      userRequest: `Genera opciones variadas para ${slotLabel(slot)} de una semana completa.`,
+      userRequest: [
+        `Genera opciones variadas para ${slotLabel(slot)} de una semana completa.`,
+        'Estas recetas deben poder cubrir el siguiente esqueleto semanal de intenciones:',
+        ...slotSkeleton.map((item) => `${dayName(item.dayIndex)}: ${item.meal?.intent ?? 'variedad equilibrada'}`),
+      ].join('\n'),
       menuContext: {
         target: targets,
+        weekSkeleton: skeletonResult.skeleton,
+        slotSkeleton,
         existingTitles: [],
       },
     }))
@@ -1492,6 +1556,7 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
         dayItems,
         titleCounts,
         dayIndex,
+        skeletonMeal: skeletonMeal(skeletonResult.skeleton.days[dayIndex]!, slot),
       })
       dayItems.push({ slot, recipe })
       const title = normalizeIngredientName(recipe.title)
@@ -1499,6 +1564,7 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
     }
     days.push(dayItems)
   }
+  const repair = repairWeekRecipeSelection(days, pools, targets)
 
   const fallbackSlots = mealSlots.filter((slot) => pools.get(slot)?.source !== 'llm')
   const slotTraces = Object.fromEntries(mealSlots.map((slot) => [slot, pools.get(slot)!.trace])) as Record<MealSlot, RecipePoolTrace>
@@ -1506,11 +1572,160 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
     days,
     source: fallbackSlots.length === 0 ? 'llm' : fallbackSlots.length === mealSlots.length ? 'template' : 'mixed',
     fallbackSlots,
+    skeleton: skeletonResult.skeleton,
+    skeletonTrace: skeletonResult.trace,
+    repair,
     trace: {
       fallbackAllowed: recipeTemplateFallbackAllowed(),
       slots: slotTraces,
     },
   }
+}
+
+async function buildWeekSkeleton(profile: ProfileRow, targets: MacroTargets): Promise<{
+  skeleton: WeekSkeleton
+  trace: WeekSkeletonTrace
+}> {
+  const generationInput: WeekSkeletonGenerationInput = {
+    locale: profile.locale,
+    profileName: profile.name,
+    mealSlots,
+    target: targets,
+    likes: profile.likes,
+    dislikes: profile.dislikes,
+    bannedFoods: profile.bannedFoods,
+    maxPrepTimeMinutes: 120,
+  }
+  const result = await generateWeekSkeletonCached(generationInput)
+  if (result.source === 'llm' && result.skeleton) {
+    return {
+      skeleton: result.skeleton,
+      trace: {
+        providerConfigured: result.providerConfigured,
+        providerSource: result.source,
+        cacheHit: Boolean(result.cacheHit),
+        fallbackAllowed: weekSkeletonFallbackAllowed(),
+        fallbackUsed: false,
+        fallbackReason: 'none',
+        error: result.error,
+      },
+    }
+  }
+
+  const fallbackAllowed = weekSkeletonFallbackAllowed()
+  if (!fallbackAllowed) {
+    throw new Error(`No se pudo generar el esqueleto semanal con LLM. El fallback determinístico está desactivado por ALLOW_WEEK_SKELETON_FALLBACK=false.`)
+  }
+
+  return {
+    skeleton: deterministicWeekSkeleton(profile, targets),
+    trace: {
+      providerConfigured: result.providerConfigured,
+      providerSource: result.source,
+      cacheHit: Boolean(result.cacheHit),
+      fallbackAllowed,
+      fallbackUsed: true,
+      fallbackReason: result.source === 'unavailable' ? 'provider_unavailable' : 'provider_failed',
+      error: result.error,
+    },
+  }
+}
+
+async function generateWeekSkeletonCached(input: WeekSkeletonGenerationInput): Promise<WeekSkeletonGenerationResult> {
+  const status = codexStatus()
+  const inputHash = hashStableJson({
+    schemaVersion: WEEK_SKELETON_SCHEMA_VERSION,
+    model: status.model,
+    reasoningEffort: status.reasoningEffort,
+    input,
+  })
+  const sql = sqlClient()
+  const [cached] = await sql<[{ output: WeekSkeletonGenerationResult }]>`
+    select output from ai_cache
+    where input_hash = ${inputHash}
+      and model = ${status.model}
+      and schema_version = ${WEEK_SKELETON_SCHEMA_VERSION}
+    order by created_at desc
+    limit 1
+  `
+  if (cached?.output) return { ...cached.output, cacheHit: true }
+
+  const result = await generateWeekSkeleton(input)
+  if (result.source === 'llm' && result.skeleton) {
+    await sql`
+      insert into ai_cache (input_hash, model, schema_version, output)
+      values (${inputHash}, ${status.model}, ${WEEK_SKELETON_SCHEMA_VERSION}, ${sql.json({ ...result, cacheHit: false } as any)})
+    `
+  }
+  return { ...result, cacheHit: false }
+}
+
+export function deterministicWeekSkeleton(profile: ProfileRow, targets: MacroTargets): WeekSkeleton {
+  const slotIntents: Record<MealSlot, string[]> = {
+    breakfast: [
+      'bol alto en proteína con lácteo, cereal integral y fruta',
+      'tostada salada con huevo o pescado, verdura fresca y grasa moderada',
+      'desayuno rápido con yogur, avena y fruta de temporada',
+      'plato templado con proteína magra, patata o pan integral y verduras',
+      'opción dulce equilibrada con lácteo, fruta y frutos secos medidos',
+      'tostada crujiente con proteína magra y tomate o espinacas',
+      'bol saciante con cereal integral, proteína láctea y fruta',
+    ],
+    lunch: [
+      'plato principal mediterráneo con proteína magra, arroz o patata y verduras',
+      'ensalada completa templada con legumbre o pescado, tubérculo y hortalizas',
+      'bol de grano integral con proteína alta y verduras de color diferente',
+      'plato casero de carne magra o pescado con carbohidrato moderado y vegetales',
+      'comida saciante con legumbre, verdura y complemento proteico',
+      'plato de pescado o pollo con patata, arroz o pasta y ensalada fresca',
+      'comida de cuchara ligera con proteína suficiente y carbohidrato controlado',
+    ],
+    dinner: [
+      'cena ligera pero completa con proteína magra y verduras cocinadas',
+      'plato templado con pescado o pollo, carbohidrato ajustado y hortalizas',
+      'cena mediterránea con legumbre moderada, verduras y proteína complementaria',
+      'salteado o plancha con proteína alta, verduras y carbohidrato pequeño',
+      'cena saciante baja en grasa con patata, arroz o pan medido',
+      'plato sencillo de huevo, pescado o ave con verduras distintas a la comida',
+      'cena casera equilibrada con textura diferente al almuerzo',
+    ],
+    snack: [
+      'snack proteico rápido con fruta o cereal simple',
+      'lácteo alto en proteína con fruta y textura crujiente',
+      'tostada o bocado salado pequeño con proteína magra',
+      'snack dulce controlado con yogur, avena o fruta',
+      'opción fresca alta en proteína y baja en preparación',
+      'bocado saciante con carbohidrato fácil de ajustar',
+      'snack ligero que complete proteína sin repetir el desayuno',
+    ],
+  }
+  const modifier = targets.goal === 'cut'
+    ? 'Priorizar volumen, proteína y saciedad sin subir grasa.'
+    : targets.goal === 'bulk'
+      ? 'Priorizar energía útil con carbohidratos compatibles y proteína suficiente.'
+      : 'Mantener equilibrio y variedad semanal.'
+  const preferenceHint = profile.likes.length > 0 ? ` Incluir cuando encaje: ${profile.likes.slice(0, 3).join(', ')}.` : ''
+  return {
+    days: Array.from({ length: 7 }, (_, dayIndex) => ({
+      dayIndex,
+      meals: mealSlots.map((slot) => {
+        const intent = `${slotIntents[slot][dayIndex % slotIntents[slot].length]}. ${modifier}${preferenceHint}`
+        return {
+          slot,
+          intent,
+          avoidRepeating: [
+            slotIntents[slot][(dayIndex + 6) % slotIntents[slot].length] ?? '',
+            ...profile.dislikes.slice(0, 3),
+            ...profile.bannedFoods.slice(0, 3),
+          ].filter((item): item is string => Boolean(item)),
+        }
+      }),
+    })),
+  }
+}
+
+function skeletonMeal(day: WeekSkeleton['days'][number], slot: MealSlot): WeekSkeletonMeal | undefined {
+  return day.meals.find((meal) => meal.slot === slot)
 }
 
 async function recipePoolForSlot(input: {
@@ -1649,6 +1864,11 @@ function recipeTemplateFallbackAllowed(): boolean {
   return String(process.env.ALLOW_RECIPE_TEMPLATE_FALLBACK ?? 'true').toLowerCase() !== 'false'
 }
 
+function weekSkeletonFallbackAllowed(): boolean {
+  loadDotEnv()
+  return String(process.env.ALLOW_WEEK_SKELETON_FALLBACK ?? 'true').toLowerCase() !== 'false'
+}
+
 function recipeFallbackReason(result: RecipeGenerationResult, acceptedCount: number): RecipePoolTrace['fallbackReason'] {
   if (result.source === 'unavailable') return 'provider_unavailable'
   if (result.source === 'failed') return 'provider_failed'
@@ -1704,6 +1924,7 @@ function chooseWeekRecipe(input: GeneratedScoredRecipe[], context: {
   dayItems: Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>
   titleCounts: Map<string, number>
   dayIndex: number
+  skeletonMeal?: WeekSkeletonMeal
 }): ReturnType<typeof scoreRecipe> {
   const scored = input.map((item) => {
     const title = normalizeIngredientName(item.recipe.title)
@@ -1713,10 +1934,215 @@ function chooseWeekRecipe(input: GeneratedScoredRecipe[], context: {
       repeatCount * 45 -
       (sameDay ? 120 : 0) +
       (item.source === 'llm' ? 8 : 0) -
-      Math.abs((context.dayIndex % 3) - (title.length % 3)) * 0.5
+      Math.abs((context.dayIndex % 3) - (title.length % 3)) * 0.5 +
+      skeletonFitScore(item.recipe, context.skeletonMeal)
     return { item, score }
   })
   return scored.sort((left, right) => right.score - left.score)[0]?.item.recipe ?? input[0]!.recipe
+}
+
+function repairWeekRecipeSelection(
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
+  pools: Map<MealSlot, RecipePoolResult>,
+  targets: MacroTargets,
+): WeekRepairTrace {
+  const maxAttempts = 2
+  const issuesBefore = evaluateWeekRecipeSelection(days, targets)
+  const actions: WeekRepairAction[] = []
+  if (issuesBefore.length === 0) {
+    return { attempted: false, maxAttempts, issuesBefore, actions, issuesAfter: [], repaired: true }
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const issues = evaluateWeekRecipeSelection(days, targets)
+    if (issues.length === 0) break
+    let changed = false
+    for (const issue of issues) {
+      const replacement = findRepairReplacement(days, pools, targets, issue)
+      if (!replacement) continue
+      const previous = days[replacement.dayIndex]![replacement.mealIndex]!
+      days[replacement.dayIndex]![replacement.mealIndex] = {
+        slot: previous.slot,
+        recipe: replacement.candidate.recipe,
+      }
+      actions.push({
+        attempt,
+        reason: issue.reason,
+        dayIndex: replacement.dayIndex,
+        slot: previous.slot,
+        previousTitle: previous.recipe.title,
+        nextTitle: replacement.candidate.recipe.title,
+        delta: diffNutrition(replacement.candidate.recipe.nutrition, previous.recipe.nutrition),
+      })
+      changed = true
+    }
+    if (!changed) break
+  }
+
+  const issuesAfter = evaluateWeekRecipeSelection(days, targets)
+  return {
+    attempted: true,
+    maxAttempts,
+    issuesBefore,
+    actions,
+    issuesAfter,
+    repaired: issuesAfter.length === 0,
+  }
+}
+
+function findRepairReplacement(
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
+  pools: Map<MealSlot, RecipePoolResult>,
+  targets: MacroTargets,
+  issue: WeekRepairIssue,
+): { dayIndex: number; mealIndex: number; candidate: GeneratedScoredRecipe } | null {
+  const beforePenalty = weekPlanPenalty(days, targets)
+  const usedTitles = titleCountsForDays(days)
+  const candidates: Array<{ dayIndex: number; mealIndex: number; candidate: GeneratedScoredRecipe; penalty: number; score: number }> = []
+  for (const [dayIndex, day] of days.entries()) {
+    if (issue.dayIndex !== undefined && issue.dayIndex !== dayIndex) continue
+    for (const [mealIndex, meal] of day.entries()) {
+      if (issue.slot && issue.slot !== meal.slot) continue
+      if (issue.title && normalizeIngredientName(meal.recipe.title) !== normalizeIngredientName(issue.title)) continue
+      const pool = pools.get(meal.slot)
+      if (!pool) continue
+      for (const candidate of pool.recipes) {
+        const currentTitle = normalizeIngredientName(meal.recipe.title)
+        const nextTitle = normalizeIngredientName(candidate.recipe.title)
+        if (!nextTitle || nextTitle === currentTitle) continue
+        if ((usedTitles.get(nextTitle) ?? 0) >= 2) continue
+        const clone = days.map((items) => items.slice())
+        clone[dayIndex]![mealIndex] = { slot: meal.slot, recipe: candidate.recipe }
+        const penalty = weekPlanPenalty(clone, targets)
+        if (penalty >= beforePenalty) continue
+        candidates.push({
+          dayIndex,
+          mealIndex,
+          candidate,
+          penalty,
+          score: beforePenalty - penalty + (candidate.source === 'llm' ? 3 : 0),
+        })
+      }
+    }
+  }
+  return candidates.sort((left, right) => right.score - left.score)[0] ?? null
+}
+
+export function evaluateWeekRecipeSelection(
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
+  targets: MacroTargets,
+): WeekRepairIssue[] {
+  const issues: WeekRepairIssue[] = []
+  const titleOccurrences = new Map<string, Array<{ dayIndex: number; slot: MealSlot; title: string }>>()
+  for (const [dayIndex, day] of days.entries()) {
+    for (const meal of day) {
+      const key = normalizeIngredientName(meal.recipe.title)
+      const current = titleOccurrences.get(key) ?? []
+      current.push({ dayIndex, slot: meal.slot, title: meal.recipe.title })
+      titleOccurrences.set(key, current)
+    }
+  }
+  for (const occurrences of titleOccurrences.values()) {
+    if (occurrences.length <= 2) continue
+    const extra = occurrences.slice(2)
+    for (const occurrence of extra) {
+      issues.push({
+        reason: 'repetition_conflict',
+        dayIndex: occurrence.dayIndex,
+        slot: occurrence.slot,
+        title: occurrence.title,
+        message: `${occurrence.title} aparece ${occurrences.length} veces en la semana.`,
+      })
+    }
+  }
+
+  for (const [dayIndex, day] of days.entries()) {
+    const dayNutrition = sumNutrition(day.map((meal) => meal.recipe.nutrition))
+    if (dayNutrition.calories < targets.calories * 0.72 || dayNutrition.calories > targets.calories * 1.28) {
+      const slot = day
+        .map((meal) => ({ slot: meal.slot, drift: Math.abs(meal.recipe.nutrition.calories - targetNutritionForSlot(targets, meal.slot).calories) }))
+        .sort((left, right) => right.drift - left.drift)[0]?.slot
+      issues.push({
+        reason: 'daily_calorie_drift',
+        dayIndex,
+        slot,
+        message: `${dayName(dayIndex)} queda demasiado lejos del objetivo diario (${round(dayNutrition.calories)} kcal vs ${targets.calories}).`,
+      })
+    }
+  }
+
+  const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  if (weeklyNutrition.proteinG < targets.proteinG * 7 * 0.9) {
+    issues.push({
+      reason: 'weekly_protein_low',
+      message: `La proteína semanal queda baja (${round(weeklyNutrition.proteinG)} g vs objetivo ${round(targets.proteinG * 7)} g).`,
+    })
+  }
+  return issues.slice(0, 12)
+}
+
+function weekPlanPenalty(days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>, targets: MacroTargets): number {
+  let penalty = 0
+  const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  penalty += Math.abs(weeklyNutrition.calories - targets.calories * 7) / Math.max(targets.calories * 7, 1) * 180
+  penalty += Math.max(0, targets.proteinG * 7 - weeklyNutrition.proteinG) / Math.max(targets.proteinG * 7, 1) * 160
+  for (const [dayIndex, day] of days.entries()) {
+    const dayNutrition = sumNutrition(day.map((meal) => meal.recipe.nutrition))
+    penalty += Math.abs(dayNutrition.calories - targets.calories) / Math.max(targets.calories, 1) * 35
+    for (const meal of day) {
+      penalty += Math.max(0, targetNutritionForSlot(targets, meal.slot).proteinG - meal.recipe.nutrition.proteinG) * 0.6
+    }
+    const dayTitles = new Set<string>()
+    for (const meal of day) {
+      const title = normalizeIngredientName(meal.recipe.title)
+      if (dayTitles.has(title)) penalty += 160
+      dayTitles.add(title)
+    }
+    if (dayIndex > 0) {
+      for (const meal of day) {
+        const previousDaySameSlot = days[dayIndex - 1]?.find((previous) => previous.slot === meal.slot)
+        if (previousDaySameSlot && normalizeIngredientName(previousDaySameSlot.recipe.title) === normalizeIngredientName(meal.recipe.title)) {
+          penalty += 45
+        }
+      }
+    }
+  }
+  for (const count of titleCountsForDays(days).values()) {
+    if (count > 2) penalty += (count - 2) * 130
+  }
+  return penalty
+}
+
+function titleCountsForDays(days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const day of days) {
+    for (const meal of day) {
+      const title = normalizeIngredientName(meal.recipe.title)
+      counts.set(title, (counts.get(title) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
+function skeletonFitScore(recipe: ReturnType<typeof scoreRecipe>, skeleton?: WeekSkeletonMeal): number {
+  if (!skeleton) return 0
+  const haystack = normalizeIngredientName([
+    recipe.title,
+    recipe.description,
+    recipe.cuisine,
+    recipe.flavorProfile,
+    ...recipe.tags,
+    ...recipe.ingredients.map((ingredient) => ingredient.name),
+  ].join(' '))
+  const intentTokens = skeleton.intent
+    .split(/[\s,.;:()]+/)
+    .map(normalizeIngredientName)
+    .filter((token) => token.length >= 4)
+  const positive = new Set(intentTokens.filter((token) => haystack.includes(token)))
+  const avoidHits = skeleton.avoidRepeating
+    .map(normalizeIngredientName)
+    .filter((token) => token.length >= 4 && haystack.includes(token)).length
+  return positive.size * 3 - avoidHits * 9
 }
 
 function chooseReplacementCandidate(

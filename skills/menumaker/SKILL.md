@@ -47,9 +47,12 @@ For menu edits:
 
 For recipe generation:
 
+- Expect weekly menu creation to build or retrieve a `WeekSkeleton` first. Treat the skeleton as the source of weekly variety intent before recipes are generated.
 - Prefer LLM-backed generation tools and structured recipe candidates.
 - Accept only candidates that the deterministic service validates for ingredients, nutrition confidence, preparation time, variety, and day/week macro fit.
 - Treat deterministic recipe templates as local fallback only when the provider is unavailable or no valid generated candidates remain.
+- Treat deterministic week skeletons as local fallback only when the provider is unavailable or returns an invalid skeleton.
+- Check generation metadata when explaining a menu: recipe source, skeleton source, fallback slots, cache hits, and repair actions.
 
 For regeneration:
 

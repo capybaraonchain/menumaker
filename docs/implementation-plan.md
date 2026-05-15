@@ -212,8 +212,11 @@ Implement:
 - Failure states.
 - AI cache keyed by input hash, model, and schema version.
 - LLM-first recipe candidate generation with deterministic templates only as an explicit fallback.
+- LLM-first week skeleton generation with deterministic skeleton fallback only when the provider is unavailable or invalid.
 - `ALLOW_RECIPE_TEMPLATE_FALLBACK=false` live mode for failing loudly instead of silently using templates.
+- `ALLOW_WEEK_SKELETON_FALLBACK=false` live mode for failing loudly instead of silently assembling a deterministic skeleton.
 - AI cache reads/writes for successful structured recipe candidate generations.
+- AI cache reads/writes for successful structured week skeleton generations.
 
 Acceptance:
 
@@ -221,7 +224,7 @@ Acceptance:
 - Failures are represented with explicit codes.
 - Structured outputs are validated before use.
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
-- Menu generation metadata records recipe source, fallback slots, fallback policy, and AI-cache hits.
+- Menu generation metadata records recipe source, skeleton source, fallback slots, fallback policy, repair trace, and AI-cache hits.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 
@@ -232,10 +235,11 @@ The planner should:
 - Build a planning brief from a profile and target snapshot.
 - Generate or assemble a week skeleton.
 - Generate structured recipe candidates through the LLM provider.
+- Pass week-skeleton intent into recipe candidate generation and selection.
 - Match ingredients.
 - Calculate deterministic nutrition.
 - Score the week.
-- Repair simple failures.
+- Repair simple failures before persistence.
 - Save a finalized weekly menu.
 
 The local deterministic recipe set is a fallback for unavailable or failed LLM generation, not the normal source of weekly menus or replacements.
@@ -246,6 +250,8 @@ Acceptance:
 - Menu nutrition is saved as snapshots.
 - Locked items are preserved during regeneration.
 - Menu generation records whether candidates came from LLM, fallback templates, or a mixed pool.
+- Menu generation records whether the week skeleton came from LLM or deterministic fallback.
+- Weekly quality tests cover obvious recipe repetition and daily calorie drift.
 - Failure states surface when targets are impossible or nutrition confidence is too low.
 
 ## Phase 6.5: Hybrid Calorie Adjustment Planner

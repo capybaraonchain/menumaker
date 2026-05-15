@@ -118,18 +118,22 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] `RepairResult` schema exists.
 - [x] `GenerationSummary` schema exists.
 - [x] Generation jobs have persisted status and logs. Rich async progress UI is deferred in Section 12.
-- [x] Week skeleton generation or assembly exists.
+- [x] Week skeleton generation exists and is LLM-first when the local Codex provider is configured.
+- [x] Week skeleton fallback can be disabled with `ALLOW_WEEK_SKELETON_FALLBACK=false`.
 - [x] Recipe candidate generation exists.
 - [x] Recipe candidate generation is LLM-first when the local Codex provider is configured.
 - [x] Deterministic recipe templates are explicit fallback only and still pass validation/scoring.
 - [x] Template fallback can be disabled with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false`.
 - [x] Menu state surfaces fallback slots and recipe-source metadata.
 - [x] Successful structured recipe generations are cached in `ai_cache`.
+- [x] Successful structured week skeleton generations are cached in `ai_cache`.
 - [x] Ingredient matching runs before finalization.
 - [x] Deterministic ingredient catalog covers the initial templates plus a broader common-food set for LLM-generated recipes.
 - [x] Ambiguous household units use food-specific serving conversions when available and downgrade confidence when falling back to generic estimates.
 - [x] Deterministic menu scoring exists.
+- [x] Weekly assembly runs bounded deterministic repair for repetition, daily calorie drift, and low weekly protein before persistence.
 - [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
+- [x] Weekly quality tests cover skeleton coverage, excessive repetition, and absurd daily calorie drift.
 - [x] Failure states are explicit in domain schemas and job storage.
 - [x] Completed weekly menu is saved as structured rows.
 

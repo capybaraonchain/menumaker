@@ -137,6 +137,21 @@ export interface WeeklyMenuPlan {
   nutrition: NutritionTotals
 }
 
+export interface WeekSkeletonMeal {
+  slot: MealSlot
+  intent: string
+  avoidRepeating: string[]
+}
+
+export interface WeekSkeletonDay {
+  dayIndex: number
+  meals: WeekSkeletonMeal[]
+}
+
+export interface WeekSkeleton {
+  days: WeekSkeletonDay[]
+}
+
 export interface ProviderStatus {
   configured: boolean
   path: string
@@ -166,4 +181,3 @@ export const mealSlotLabels: Record<Locale, Record<MealSlot, string>> = {
     snack: 'Snack',
   },
 }
-

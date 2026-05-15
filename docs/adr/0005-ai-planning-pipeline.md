@@ -156,6 +156,16 @@ Hard constraints include:
 
 The planner should prefer weekly averages over perfect per-meal balance.
 
+## Week Skeleton
+
+Weekly generation creates a first-class `WeekSkeleton` before recipe candidates are selected.
+
+The preferred source is the configured LLM provider. The skeleton contains seven days, every default meal slot, a concise intent for each meal, and nearby repetition warnings. Recipe candidate generation receives the skeleton intent so the model is not only filling isolated slot macros.
+
+For local v1, a deterministic skeleton fallback is allowed when the provider is missing, stale, failed, or returns an invalid skeleton. This fallback must be recorded in generation metadata and can be disabled with `ALLOW_WEEK_SKELETON_FALLBACK=false`.
+
+Successful structured skeleton generations are cached with the same AI cache policy as recipe candidates: input hash, model, reasoning effort, and schema version.
+
 ## Repair Loop
 
 If a generated menu fails or scores poorly, the system should repair targeted parts instead of regenerating everything blindly.
@@ -171,6 +181,8 @@ Repair actions may include:
 - Ask the user when an ambiguity blocks progress.
 
 The repair loop must have a retry limit. If the retry limit is reached, the generation job should return a clear failure state instead of looping indefinitely.
+
+Local v1 now includes a bounded deterministic repair pass during weekly assembly. It checks obvious repetition conflicts, absurd daily calorie drift, and low weekly protein before the menu is persisted. This is not the final full LLM repair controller; future repair jobs should emit structured `RepairRequest` / `RepairResult` records and preserve retry logs.
 
 ## Calorie Adjustment Rebalancing
 
