@@ -90,6 +90,7 @@ Mutation tools:
 - `relax_profile_preferences`
 - `apply_calorie_target_change`
 - `delete_profile`
+- `reset_local_data`
 - `retry_generation_job`
 
 ## Confirmation Rules
@@ -126,6 +127,7 @@ Examples:
 - Regenerating the whole week requires confirmation and must preserve locked days and meals.
 - Changing calorie targets requires a calorie adjustment preview when possible. The confirmed mutation should apply the previewed plan and reject it if the menu changed after preview.
 - Deleting a profile requires explicit confirmation and exact profile-name echo. It must return an export snapshot when requested, clear dependent profile data, and avoid touching other profiles.
+- Full local reset requires explicit confirmation and the exact phrase `BORRAR MENUMAKER LOCAL`. It must return an export snapshot when requested, clear all local user app data, and leave schema plus seed nutrition records intact.
 
 ## Mutation Return Shape
 

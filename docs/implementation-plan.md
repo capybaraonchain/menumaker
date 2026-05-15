@@ -306,6 +306,7 @@ Screens:
 - `Historial`.
 - `Perfil`.
 - Profile deletion/admin reset zone.
+- Full local reset with exact phrase confirmation and export snapshot.
 
 Acceptance:
 

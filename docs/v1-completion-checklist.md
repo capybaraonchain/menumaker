@@ -149,6 +149,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] `Semana` is the primary screen after onboarding.
 - [x] Selected profile is visible.
 - [x] Profile deletion exists behind exact-name confirmation and returns an export snapshot.
+- [x] Full local reset exists behind exact phrase confirmation and returns an export snapshot.
 - [x] Week range is visible.
 - [x] Daily calories/macros are visible.
 - [x] Weekly target progress is visible.
@@ -245,6 +246,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] `get_weekly_menu` works.
 - [x] `analyze_recipe_nutrition` works.
 - [x] `save_ingredient_mapping` works through the shared app action registry.
+- [x] `reset_local_data` works through the shared app action registry with exact phrase confirmation.
 - [x] `suggest_meal_replacements` works.
 - [x] `apply_similar_replacements` works through the shared app action registry.
 - [x] `preview_calorie_adjustment_plan` works.

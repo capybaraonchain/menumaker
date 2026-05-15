@@ -52,6 +52,7 @@ const pendingActionNames = [
   'regenerateMeal',
   'savePreference',
   'replaceMeal',
+  'resetLocalData',
   'applySimilarReplacements',
   'deleteProfile',
   'retryGenerationJob',
@@ -598,6 +599,23 @@ server.registerTool(
   async ({ profileId, expectedName, exportBeforeDelete, confirmed }) => {
     requireConfirmation(confirmed, 'profile deletion')
     return json(await executeAppAction('deleteProfile', { profileId, expectedName, exportBeforeDelete }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'reset_local_data',
+  {
+    description: 'Mutation: erase all local MenuMaker app data for the local user, returning an export snapshot when requested. Leaves schema and seed nutrition catalog intact. Requires confirmed=true and exact phrase BORRAR MENUMAKER LOCAL.',
+    inputSchema: {
+      expectedPhrase: z.string().min(1),
+      exportBeforeDelete: z.boolean().default(true),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ expectedPhrase, exportBeforeDelete, confirmed }) => {
+    requireConfirmation(confirmed, 'local data reset')
+    return json(await executeAppAction('resetLocalData', { expectedPhrase, exportBeforeDelete }, 'mcp'))
   },
 )
 

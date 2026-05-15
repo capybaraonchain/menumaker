@@ -1057,6 +1057,9 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
   const [deleteName, setDeleteName] = useState('')
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [resetPhrase, setResetPhrase] = useState('')
+  const [resetError, setResetError] = useState<string | null>(null)
+  const [resetBusy, setResetBusy] = useState(false)
   const [fallbackBusy, setFallbackBusy] = useState<string | null>(null)
   const settings = state.runtimeSettings
   async function updateFallback(key: 'recipeTemplateFallbackAllowed' | 'weekSkeletonFallbackAllowed', value: boolean) {
@@ -1142,6 +1145,34 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
           }}
         >
           <Trash2 /> {deleteBusy ? 'Eliminando...' : 'Eliminar perfil'}
+        </button>
+        <hr />
+        <div>
+          <h3>Borrar todo local</h3>
+          <p>Borra todos los perfiles, menús, recetas generadas, trabajos, preferencias, alias, ajustes locales y caché AI. La app queda lista para empezar desde cero.</p>
+        </div>
+        <label>Escribe BORRAR MENUMAKER LOCAL<input value={resetPhrase} onChange={(event) => {
+          setResetPhrase(event.target.value)
+          setResetError(null)
+        }} /></label>
+        {resetError && <p className="error">{resetError}</p>}
+        <button
+          className="danger-button"
+          disabled={resetBusy || resetPhrase !== 'BORRAR MENUMAKER LOCAL'}
+          onClick={async () => {
+            setResetBusy(true)
+            setResetError(null)
+            try {
+              await onAction({ action: 'resetLocalData', expectedPhrase: resetPhrase, exportBeforeDelete: true })
+              setResetPhrase('')
+            } catch (error) {
+              setResetError(error instanceof Error ? error.message : 'No se pudo borrar el entorno local.')
+            } finally {
+              setResetBusy(false)
+            }
+          }}
+        >
+          <Trash2 /> {resetBusy ? 'Borrando...' : 'Borrar todo local'}
         </button>
       </section>
     </section>

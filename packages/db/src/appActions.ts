@@ -12,6 +12,7 @@ import {
   previewRegenerateMealPlan,
   previewRegenerateWeekPlan,
   replaceMeal,
+  resetLocalData,
   retryGenerationJob,
   runGenerationJob,
   saveIngredientMapping,
@@ -119,6 +120,10 @@ export const appActionSchemas = {
   deleteProfile: z.object({
     profileId: uuid,
     expectedName: z.string().min(1),
+    exportBeforeDelete: z.boolean().default(true),
+  }),
+  resetLocalData: z.object({
+    expectedPhrase: z.string().min(1),
     exportBeforeDelete: z.boolean().default(true),
   }),
   retryGenerationJob: z.object({
@@ -438,6 +443,28 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       return {
         ...result,
         state: await appStateResult(result.remainingProfileId ?? undefined),
+      }
+    },
+  },
+  resetLocalData: {
+    name: 'resetLocalData',
+    inputSchema: appActionSchemas.resetLocalData,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.reset_local_data',
+    confirmationCopyEs: () => 'Se borrarán todos los datos locales de MenuMaker: perfiles, menús, recetas generadas, trabajos, preferencias, alias de ingredientes, ajustes locales y caché AI. Se devolverá un snapshot de exportación si está habilitado. ¿Continuar?',
+    successCopyEs: (_, result) => {
+      const counts = result && typeof result === 'object'
+        ? (result as { deletedCounts?: { profiles?: number; menus?: number; meals?: number; generationJobs?: number } }).deletedCounts
+        : null
+      return counts
+        ? `Listo. Borré los datos locales: ${counts.profiles ?? 0} perfil(es), ${counts.menus ?? 0} menú(s), ${counts.meals ?? 0} comida(s), ${counts.generationJobs ?? 0} trabajo(s).`
+        : 'Listo. Borré los datos locales.'
+    },
+    async execute(input) {
+      const result = await resetLocalData(input.expectedPhrase, input.exportBeforeDelete)
+      return {
+        ...result,
+        state: await appStateResult(),
       }
     },
   },
@@ -772,6 +799,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'replaceMeal') return 'Reemplazar comida'
   if (name === 'applySimilarReplacements') return 'Aplicar similares'
   if (name === 'deleteProfile') return 'Eliminar perfil'
+  if (name === 'resetLocalData') return 'Borrar datos locales'
   if (name === 'retryGenerationJob') return 'Reintentar generación'
   if (name === 'relaxProfilePreferences') return 'Relajar preferencias'
   if (name === 'startWeeklyMenuGeneration') return 'Generar semana'
@@ -810,7 +838,7 @@ function profileIdFromInput(input: unknown): string | null {
 }
 
 function eventProfileId(name: AppActionName, input: unknown): string | null {
-  if (name === 'deleteProfile') return null
+  if (name === 'deleteProfile' || name === 'resetLocalData') return null
   return profileIdFromInput(input)
 }
 

@@ -276,6 +276,30 @@ export interface ProfileDeletionResult {
   export: ProfileDeletionExport | null
 }
 
+export interface LocalResetExport {
+  exportedAt: string
+  profiles: ProfileDeletionExport[]
+  runtimeSettings: RuntimeSettings
+  counts: {
+    profiles: number
+    menus: number
+    meals: number
+    savedRecipes: number
+    profilePreferences: number
+    generationJobs: number
+    pendingActions: number
+    actionEvents: number
+    userIngredientAliases: number
+    aiCacheEntries: number
+  }
+}
+
+export interface LocalResetResult {
+  resetAt: string
+  deletedCounts: LocalResetExport['counts']
+  export: LocalResetExport | null
+}
+
 export interface ReplacementProposal {
   proposalId: string
   affectedMeals: string[]
@@ -880,6 +904,80 @@ export async function deleteProfile(profileId: string, expectedName: string, exp
     deletedProfileId: profileId,
     deletedProfileName: profile.name,
     remainingProfileId: remainingProfile?.id ?? null,
+    export: exportSnapshot,
+  }
+}
+
+export async function exportLocalData(): Promise<LocalResetExport> {
+  const sql = sqlClient()
+  const profiles = await listProfiles()
+  const profileExports: ProfileDeletionExport[] = []
+  for (const profile of profiles) {
+    profileExports.push(await exportProfileData(profile.id))
+  }
+  const counts = {
+    profiles: profiles.length,
+    menus: await countRows(sql`select count(*)::int as count from weekly_menus where user_id = ${localUserId()}`),
+    meals: await countRows(sql`
+      select count(*)::int as count
+      from menu_meals
+      where user_id = ${localUserId()}
+    `),
+    savedRecipes: await countRows(sql`select count(*)::int as count from saved_recipes where user_id = ${localUserId()}`),
+    profilePreferences: await countRows(sql`select count(*)::int as count from profile_preferences where user_id = ${localUserId()}`),
+    generationJobs: await countRows(sql`select count(*)::int as count from generation_jobs where user_id = ${localUserId()}`),
+    pendingActions: await countRows(sql`select count(*)::int as count from pending_actions where user_id = ${localUserId()}`),
+    actionEvents: await countRows(sql`select count(*)::int as count from action_events where user_id = ${localUserId()}`),
+    userIngredientAliases: await countRows(sql`select count(*)::int as count from food_aliases where user_id = ${localUserId()} and source = 'user'`),
+    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache`),
+  }
+  return {
+    exportedAt: new Date().toISOString(),
+    profiles: profileExports,
+    runtimeSettings: await getRuntimeSettings(),
+    counts,
+  }
+}
+
+export async function resetLocalData(expectedPhrase: string, exportBeforeDelete = true): Promise<LocalResetResult> {
+  const phrase = 'BORRAR MENUMAKER LOCAL'
+  if (expectedPhrase.trim() !== phrase) {
+    throw new Error(`Para borrar todos los datos locales, escribe exactamente "${phrase}".`)
+  }
+  const exportSnapshot = exportBeforeDelete ? await exportLocalData() : null
+  const sql = sqlClient()
+  const deletedCounts = exportSnapshot?.counts ?? {
+    profiles: await countRows(sql`select count(*)::int as count from profiles where user_id = ${localUserId()}`),
+    menus: await countRows(sql`select count(*)::int as count from weekly_menus where user_id = ${localUserId()}`),
+    meals: await countRows(sql`select count(*)::int as count from menu_meals where user_id = ${localUserId()}`),
+    savedRecipes: await countRows(sql`select count(*)::int as count from saved_recipes where user_id = ${localUserId()}`),
+    profilePreferences: await countRows(sql`select count(*)::int as count from profile_preferences where user_id = ${localUserId()}`),
+    generationJobs: await countRows(sql`select count(*)::int as count from generation_jobs where user_id = ${localUserId()}`),
+    pendingActions: await countRows(sql`select count(*)::int as count from pending_actions where user_id = ${localUserId()}`),
+    actionEvents: await countRows(sql`select count(*)::int as count from action_events where user_id = ${localUserId()}`),
+    userIngredientAliases: await countRows(sql`select count(*)::int as count from food_aliases where user_id = ${localUserId()} and source = 'user'`),
+    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache`),
+  }
+
+  await sql.begin(async (tx) => {
+    await tx`delete from pending_actions where user_id = ${localUserId()}`
+    await tx`delete from action_events where user_id = ${localUserId()}`
+    await tx`delete from generation_jobs where user_id = ${localUserId()}`
+    await tx`delete from saved_recipes where user_id = ${localUserId()}`
+    await tx`delete from profile_preferences where user_id = ${localUserId()}`
+    await tx`delete from weekly_menus where user_id = ${localUserId()}`
+    await tx`delete from macro_targets where user_id = ${localUserId()}`
+    await tx`delete from nutrition_estimates where user_id = ${localUserId()}`
+    await tx`delete from recipes where user_id = ${localUserId()}`
+    await tx`delete from profiles where user_id = ${localUserId()}`
+    await tx`delete from food_aliases where user_id = ${localUserId()} and source = 'user'`
+    await tx`delete from app_settings where user_id = ${localUserId()}`
+    await tx`delete from ai_cache`
+  })
+
+  return {
+    resetAt: new Date().toISOString(),
+    deletedCounts,
     export: exportSnapshot,
   }
 }

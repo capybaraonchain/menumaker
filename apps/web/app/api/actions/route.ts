@@ -19,6 +19,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   regenerateMeal: 'regenerateMeal',
   regenerateWeek: 'regenerateWeek',
   replaceMeal: 'replaceMeal',
+  resetLocalData: 'resetLocalData',
   relaxProfilePreferences: 'relaxProfilePreferences',
   retryGenerationJob: 'retryGenerationJob',
   runGenerationJob: 'runGenerationJob',

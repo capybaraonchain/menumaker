@@ -113,3 +113,10 @@ For profile deletion:
 2. Ask the user to confirm deletion by repeating the exact profile name.
 3. Call `delete_profile` with `confirmed=true`, `expectedName`, and `exportBeforeDelete=true` unless the user explicitly declines export.
 4. Tell the user which profile was deleted and whether another profile remains active.
+
+For full local reset:
+
+1. Use only when the user explicitly asks to wipe all local MenuMaker data.
+2. Require exact phrase `BORRAR MENUMAKER LOCAL` and `confirmed=true`.
+3. Call `reset_local_data` with `exportBeforeDelete=true` unless the user explicitly declines export.
+4. Explain that schema and seed nutrition records remain, but profiles, menus, generated recipes, jobs, preferences, user aliases, local settings, and AI cache are cleared.
