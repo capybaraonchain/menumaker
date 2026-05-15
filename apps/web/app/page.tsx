@@ -1301,6 +1301,10 @@ function jobKindLabel(kind: string): string {
   if (kind === 'regenerate_week') return 'Regeneración semanal'
   if (kind === 'regenerate_day') return 'Regeneración de día'
   if (kind === 'regenerate_meal') return 'Regeneración de comida'
+  if (kind === 'preview_regenerate_week') return 'Preview regeneración semanal'
+  if (kind === 'preview_regenerate_day') return 'Preview regeneración de día'
+  if (kind === 'preview_regenerate_meal') return 'Preview regeneración de comida'
+  if (kind === 'preview_calorie_adjustment') return 'Preview reajuste calórico'
   if (kind.startsWith('retry_')) return `Reintento de ${jobKindLabel(kind.replace(/^retry_/, ''))}`
   return kind.replace(/_/g, ' ')
 }

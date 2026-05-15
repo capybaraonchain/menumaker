@@ -65,6 +65,8 @@ Proposal tools:
 - `preview_regenerate_week`
 - `preview_profile_preference_update`
 - `preview_calorie_adjustment_plan`
+- `enqueue_preview_generation_job`
+- `run_preview_generation_job`
 
 Mutation tools change durable state.
 
@@ -201,9 +203,10 @@ The companion skill should instruct agents to:
 - Preserve locked meals and locked days.
 - Use deterministic nutrition analysis before macro claims.
 - Ask for confirmation before profile-wide or week-wide changes.
-- Treat generated menus and regenerations as async jobs.
+- Treat generated menus, regenerations, and long preview creation as async-capable jobs.
 - Use `enqueue_weekly_menu_generation` when an external agent should create a queued job without blocking on the full planner.
 - Use `run_generation_job` to execute a queued weekly-generation job after confirmation.
+- Use `enqueue_preview_generation_job` and `run_preview_generation_job` when a regeneration or calorie-adjustment preview may take long enough that the agent should persist progress and the exact plan before asking for confirmation.
 - Use `start_weekly_menu_generation` only when the user explicitly wants enqueue-and-run in one step.
 - Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
 - Use persisted `generationSummary`, `remediation`, `repairRemediation`, and `RepairRequest` / `RepairResult` telemetry from generation job results when explaining what changed, why a generation failed, and what the next safe action is.

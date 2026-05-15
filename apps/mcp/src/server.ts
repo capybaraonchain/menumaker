@@ -11,6 +11,7 @@ import {
   confirmPendingAction,
   createPendingAction,
   createProfileAndFirstMenu,
+  enqueuePreviewGenerationJob,
   enqueueWeeklyMenuGenerationJob,
   executeAppAction,
   getAppState,
@@ -28,6 +29,7 @@ import {
   previewRegenerateMealPlan,
   previewRegenerateWeekPlan,
   replaceMeal,
+  runPreviewGenerationJob,
   runGenerationJob,
   saveMacroTarget,
   saveProfilePreference,
@@ -36,6 +38,7 @@ import {
   unstarRecipe,
   updateProfile,
   type MenuMealView,
+  type PreviewGenerationJobInput,
   type ProfileRow,
 } from '@menumaker/db'
 import { z } from 'zod'
@@ -137,6 +140,30 @@ function summarizeMacroTarget(profile: ProfileRow) {
 function mealIncludesIngredient(meal: MenuMealView, ingredient: string) {
   const normalized = ingredient.toLowerCase()
   return meal.recipe.ingredients.some((item) => item.name.toLowerCase().includes(normalized))
+}
+
+function previewJobInputFromMcp(input: {
+  kind: 'preview_regenerate_week' | 'preview_regenerate_day' | 'preview_regenerate_meal' | 'preview_calorie_adjustment'
+  profileId: string
+  menuId?: string
+  dayPlanId?: string
+  menuMealId?: string
+  calories?: number
+}): PreviewGenerationJobInput {
+  if (input.kind === 'preview_regenerate_week') {
+    if (!input.menuId) throw new Error('menuId is required for preview_regenerate_week.')
+    return { kind: input.kind, profileId: input.profileId, menuId: input.menuId }
+  }
+  if (input.kind === 'preview_regenerate_day') {
+    if (!input.dayPlanId) throw new Error('dayPlanId is required for preview_regenerate_day.')
+    return { kind: input.kind, profileId: input.profileId, dayPlanId: input.dayPlanId }
+  }
+  if (input.kind === 'preview_regenerate_meal') {
+    if (!input.menuMealId) throw new Error('menuMealId is required for preview_regenerate_meal.')
+    return { kind: input.kind, profileId: input.profileId, menuMealId: input.menuMealId }
+  }
+  if (typeof input.calories !== 'number') throw new Error('calories is required for preview_calorie_adjustment.')
+  return { kind: input.kind, profileId: input.profileId, calories: input.calories }
 }
 
 server.registerTool(
@@ -502,6 +529,36 @@ server.registerTool(
       requiresConfirmation: true,
       plan: await previewRegenerateWeekPlan(menuId),
     }),
+)
+
+server.registerTool(
+  'enqueue_preview_generation_job',
+  {
+    description: 'Proposal: enqueue a long-running server-owned preview job for regeneration or calorie adjustment. Does not mutate menu state.',
+    inputSchema: {
+      kind: z.enum(['preview_regenerate_week', 'preview_regenerate_day', 'preview_regenerate_meal', 'preview_calorie_adjustment']),
+      profileId: z.string().uuid(),
+      menuId: z.string().uuid().optional(),
+      dayPlanId: z.string().uuid().optional(),
+      menuMealId: z.string().uuid().optional(),
+      calories: z.number().int().min(900).max(5000).optional(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ kind, profileId, menuId, dayPlanId, menuMealId, calories }) => {
+    const input = previewJobInputFromMcp({ kind, profileId, menuId, dayPlanId, menuMealId, calories })
+    return json(await enqueuePreviewGenerationJob(input))
+  },
+)
+
+server.registerTool(
+  'run_preview_generation_job',
+  {
+    description: 'Proposal: execute a queued preview job and store the resulting server-owned plan in generation_jobs.result.plan. Does not mutate menu state.',
+    inputSchema: { jobId: z.string().uuid() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ jobId }) => json(await runPreviewGenerationJob(jobId)),
 )
 
 server.registerTool(

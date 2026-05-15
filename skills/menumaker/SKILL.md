@@ -60,18 +60,20 @@ For regeneration:
 
 1. Check locks.
 2. Use `preview_regenerate_meal`, `preview_regenerate_day`, or `preview_regenerate_week` before mutation.
-3. Present the returned plan summary: replacements, preserved locks, macro impact, warnings, and stale-plan rule.
-4. Regenerate only after confirmation, passing the previewed plan to the matching mutation tool.
-5. If apply rejects the plan because the menu changed, create a fresh preview instead of retrying the stale plan.
-6. Report what changed and whether locks were preserved.
+3. Use `enqueue_preview_generation_job` and `run_preview_generation_job` when the preview may be slow or the agent needs a persisted plan before confirmation.
+4. Present the returned plan summary: replacements, preserved locks, macro impact, warnings, and stale-plan rule.
+5. Regenerate only after confirmation, passing the previewed plan to the matching mutation tool.
+6. If apply rejects the plan because the menu changed, create a fresh preview instead of retrying the stale plan.
+7. Report what changed and whether locks were preserved.
 
 For calorie target changes:
 
 1. Use `preview_calorie_adjustment_plan` before mutation.
-2. Explain the plan in Spanish for Spanish profiles: porciones, rebalances, replacements, preserved locks, weekly impact, and warnings.
-3. Do not claim a replacement recipe fits until the deterministic service has validated day and week impact.
-4. Call `apply_calorie_target_change` only after confirmation, passing the previewed plan when available.
-5. If the apply call says the menu changed, generate a fresh preview instead of retrying the stale plan.
+2. Use `enqueue_preview_generation_job` and `run_preview_generation_job` when the calorie preview may be slow or should be persisted in job history before confirmation.
+3. Explain the plan in Spanish for Spanish profiles: porciones, rebalances, replacements, preserved locks, weekly impact, and warnings.
+4. Do not claim a replacement recipe fits until the deterministic service has validated day and week impact.
+5. Call `apply_calorie_target_change` only after confirmation, passing the previewed plan when available.
+6. If the apply call says the menu changed, generate a fresh preview instead of retrying the stale plan.
 
 For macro questions:
 
@@ -104,8 +106,9 @@ For generation failures or progress:
 7. Use `enqueue_weekly_menu_generation` when the user wants to queue a weekly generation job without waiting for completion.
 8. Use `run_generation_job` when the user confirms execution of a queued generation job.
 9. Use `start_weekly_menu_generation` only when the user wants enqueue-and-run in one step.
-10. Use `relax_profile_preferences` only after the user explicitly chooses which dislikes or banned foods to remove.
-11. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
+10. Use `enqueue_preview_generation_job` and `run_preview_generation_job` for long-running regeneration or calorie-adjustment previews.
+11. Use `relax_profile_preferences` only after the user explicitly chooses which dislikes or banned foods to remove.
+12. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
 
 For profile deletion:
 

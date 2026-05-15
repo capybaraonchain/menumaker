@@ -246,6 +246,23 @@ interface WeeklyMenuGenerationJobInput {
   kind: string
 }
 
+export type PreviewGenerationJobKind =
+  | 'preview_regenerate_week'
+  | 'preview_regenerate_day'
+  | 'preview_regenerate_meal'
+  | 'preview_calorie_adjustment'
+
+export type PreviewGenerationJobInput =
+  | { kind: 'preview_regenerate_week'; profileId: string; menuId: string }
+  | { kind: 'preview_regenerate_day'; profileId: string; dayPlanId: string }
+  | { kind: 'preview_regenerate_meal'; profileId: string; menuMealId: string }
+  | { kind: 'preview_calorie_adjustment'; profileId: string; calories: number }
+
+export interface PreviewGenerationJobResult {
+  job: GenerationJobView
+  plan: RegenerationPlan | CalorieAdjustmentPlan
+}
+
 export interface ProfileDeletionExport {
   exportedAt: string
   profile: ProfileRow
@@ -1058,7 +1075,7 @@ export async function enqueueWeeklyMenuGenerationJob(profileId: string, targetId
 export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   const sql = sqlClient()
   const [job] = await sql`
-    select id, profile_id, status, kind, result
+    select id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
     from generation_jobs
     where id = ${jobId} and user_id = ${localUserId()}
   `
@@ -1215,6 +1232,125 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
     where id = ${jobId} and user_id = ${localUserId()}
   `
   return getWeeklyMenu(menu.id)
+}
+
+export async function enqueuePreviewGenerationJob(input: PreviewGenerationJobInput): Promise<GenerationJobView> {
+  const sql = sqlClient()
+  await assertPreviewJobInput(input)
+  const [job] = await sql`
+    insert into generation_jobs (user_id, profile_id, status, kind, logs, result)
+    values (
+      ${localUserId()}, ${input.profileId}, 'queued', ${input.kind},
+      ${sql.json(['En cola', 'Previsualización pendiente'] as any)},
+      ${sql.json({ previewInput: input } as any)}
+    )
+    returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+  `
+  if (!job) throw new Error('No se pudo crear el trabajo de previsualización.')
+  return generationJobFromRow(job)
+}
+
+export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGenerationJobResult> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (!job) throw new Error('Trabajo de previsualización no encontrado.')
+  if (!String(job.kind).startsWith('preview_')) throw new Error('Este trabajo no es una previsualización.')
+  if (job.status === 'completed') {
+    const result = job.result && typeof job.result === 'object' ? job.result as { plan?: RegenerationPlan | CalorieAdjustmentPlan } : {}
+    if (!result.plan) throw new Error('La previsualización completada no tiene plan guardado.')
+    return { job: generationJobFromRow(job), plan: result.plan }
+  }
+  if (job.status !== 'queued' && job.status !== 'failed') {
+    throw new Error(`No se puede ejecutar una previsualización en estado ${job.status}.`)
+  }
+
+  const input = previewJobInputFromResult(job.result)
+  await sql`
+    update generation_jobs
+    set status = 'running',
+      logs = ${sql.json(['En cola', 'Generando previsualización'] as any)},
+      error = null,
+      failure_code = null,
+      updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+
+  try {
+    const plan = await previewPlanFromJobInput(input)
+    const logs = ['En cola', 'Generando previsualización', 'Plan guardado']
+    const [updated] = await sql`
+      update generation_jobs set status = 'completed',
+        logs = ${sql.json(logs as any)},
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({ previewInput: input, plan } as any)}::jsonb,
+        error = null,
+        updated_at = now()
+      where id = ${jobId} and user_id = ${localUserId()}
+      returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    `
+    return { job: generationJobFromRow(updated), plan }
+  } catch (error) {
+    const failureCode = classifyGenerationFailure(error)
+    const remediation = buildGenerationRemediationPlan({
+      code: failureCode,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    const [updated] = await sql`
+      update generation_jobs set status = 'failed',
+        failure_code = ${failureCode},
+        logs = ${sql.json(['En cola', 'Generando previsualización', 'Fallo de previsualización'] as any)},
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({ previewInput: input, remediation } as any)}::jsonb,
+        error = ${error instanceof Error ? error.message : String(error)},
+        updated_at = now()
+      where id = ${jobId} and user_id = ${localUserId()}
+      returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    `
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { job: generationJobFromRow(updated) })
+  }
+}
+
+async function assertPreviewJobInput(input: PreviewGenerationJobInput): Promise<void> {
+  if (input.kind === 'preview_regenerate_week') {
+    const menu = await getWeeklyMenu(input.menuId)
+    if (menu.profileId !== input.profileId) throw new Error('El menú no pertenece a ese perfil.')
+    return
+  }
+  if (input.kind === 'preview_regenerate_day') {
+    const menu = await menuForDay(input.dayPlanId)
+    if (menu.profileId !== input.profileId) throw new Error('El día no pertenece a ese perfil.')
+    return
+  }
+  if (input.kind === 'preview_regenerate_meal') {
+    const menu = await menuForMeal(input.menuMealId)
+    if (menu.profileId !== input.profileId) throw new Error('La comida no pertenece a ese perfil.')
+    return
+  }
+  const profile = (await listProfiles()).find((item) => item.id === input.profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+}
+
+function previewJobInputFromResult(result: unknown): PreviewGenerationJobInput {
+  const input = result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as { previewInput?: Partial<PreviewGenerationJobInput> }).previewInput
+    : null
+  if (!input || typeof input.kind !== 'string' || typeof input.profileId !== 'string') {
+    throw new Error('El trabajo no contiene input de previsualización.')
+  }
+  if (input.kind === 'preview_regenerate_week' && typeof input.menuId === 'string') return input as PreviewGenerationJobInput
+  if (input.kind === 'preview_regenerate_day' && typeof input.dayPlanId === 'string') return input as PreviewGenerationJobInput
+  if (input.kind === 'preview_regenerate_meal' && typeof input.menuMealId === 'string') return input as PreviewGenerationJobInput
+  if (input.kind === 'preview_calorie_adjustment' && typeof input.calories === 'number') return input as PreviewGenerationJobInput
+  throw new Error('El input de previsualización no es válido.')
+}
+
+async function previewPlanFromJobInput(input: PreviewGenerationJobInput): Promise<RegenerationPlan | CalorieAdjustmentPlan> {
+  if (input.kind === 'preview_regenerate_week') return previewRegenerateWeekPlan(input.menuId)
+  if (input.kind === 'preview_regenerate_day') return previewRegenerateDayPlan(input.dayPlanId)
+  if (input.kind === 'preview_regenerate_meal') return previewRegenerateMealPlan(input.menuMealId)
+  return previewCalorieAdjustmentPlan(input.profileId, input.calories)
 }
 
 export async function getCurrentMenu(profileId: string): Promise<WeeklyMenuView | null> {

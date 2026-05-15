@@ -210,6 +210,8 @@ Implement:
 - Generation job creation.
 - Queued weekly-generation job input persisted in `generation_jobs.result.jobInput`.
 - A reusable weekly-generation runner that claims a queued job and produces the menu.
+- Queued preview-generation input persisted in `generation_jobs.result.previewInput`.
+- A reusable preview-generation runner that stores the exact server-owned plan in `generation_jobs.result.plan` for regeneration and calorie-adjustment previews.
 - Job state transitions.
 - Job logs.
 - Code-specific remediation metadata persisted in `generation_jobs.result.remediation` for failed jobs.

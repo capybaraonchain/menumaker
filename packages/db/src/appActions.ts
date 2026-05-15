@@ -4,6 +4,7 @@ import {
   applyRegenerationPlan,
   applySimilarIngredientReplacements,
   deleteProfile,
+  enqueuePreviewGenerationJob,
   enqueueWeeklyMenuGenerationJob,
   getAppState,
   lockDay,
@@ -14,6 +15,7 @@ import {
   replaceMeal,
   resetLocalData,
   retryGenerationJob,
+  runPreviewGenerationJob,
   runGenerationJob,
   saveIngredientMapping,
   saveProfilePreference,
@@ -24,6 +26,7 @@ import {
   unstarRecipe,
   previewCalorieAdjustmentPlan,
   type RegenerationPlan,
+  type PreviewGenerationJobInput,
 } from './appService'
 import type { CalorieAdjustmentPlan } from './caloriePlanner'
 import { sqlClient } from './client'
@@ -140,6 +143,16 @@ export const appActionSchemas = {
     runNow: z.boolean().default(true),
   }),
   runGenerationJob: z.object({
+    profileId: uuid.optional(),
+    jobId: uuid,
+  }),
+  enqueuePreviewGenerationJob: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('preview_regenerate_week'), profileId: uuid, menuId: uuid }),
+    z.object({ kind: z.literal('preview_regenerate_day'), profileId: uuid, dayPlanId: uuid }),
+    z.object({ kind: z.literal('preview_regenerate_meal'), profileId: uuid, menuMealId: uuid }),
+    z.object({ kind: z.literal('preview_calorie_adjustment'), profileId: uuid, calories: z.number().int().min(900).max(5000) }),
+  ]),
+  runPreviewGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
   }),
@@ -557,6 +570,36 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       return {
         ...result,
         state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  enqueuePreviewGenerationJob: {
+    name: 'enqueuePreviewGenerationJob',
+    inputSchema: appActionSchemas.enqueuePreviewGenerationJob,
+    requiresConfirmation: false,
+    auditLabel: 'proposal.enqueue_preview_generation_job',
+    confirmationCopyEs: () => '',
+    successCopyEs: () => 'Previsualización en cola.',
+    async execute(input) {
+      const job = await enqueuePreviewGenerationJob(input as PreviewGenerationJobInput)
+      return {
+        job,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  runPreviewGenerationJob: {
+    name: 'runPreviewGenerationJob',
+    inputSchema: appActionSchemas.runPreviewGenerationJob,
+    requiresConfirmation: false,
+    auditLabel: 'proposal.run_preview_generation_job',
+    confirmationCopyEs: () => '',
+    successCopyEs: () => 'Previsualización completada.',
+    async execute(input) {
+      const result = await runPreviewGenerationJob(input.jobId)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId ?? result.job.profileId ?? undefined),
       }
     },
   },
