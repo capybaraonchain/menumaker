@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   codexStatus,
   generateRecipeCandidates,
@@ -155,6 +155,57 @@ export interface SimilarReplacementResult {
 export interface AppliedCalorieAdjustmentResult {
   menu: WeeklyMenuView
   plan: CalorieAdjustmentPlan
+  changeSummary: string
+}
+
+export type RegenerationPlanKind = 'meal' | 'day' | 'week'
+export type RegenerationDecisionKind = 'recipe_replacement' | 'preserve_locked'
+
+export interface RegenerationDecision {
+  dayIndex: number
+  dayId: string
+  dayLocked: boolean
+  slot: MealSlot
+  menuMealId: string
+  locked: boolean
+  kind: RegenerationDecisionKind
+  reason: string
+  previousRecipeId: string
+  previousTitle: string
+  nextTitle: string
+  existingRecipeId?: string
+  recipe: RecipeCandidate
+  nutrition: NutritionTotals
+  previousNutrition: NutritionTotals
+  delta: NutritionTotals
+  source: 'llm' | 'template' | 'existing'
+}
+
+export interface RegenerationPlan {
+  planId: string
+  kind: RegenerationPlanKind
+  profileId: string
+  baseMenuId: string
+  baseMenuHash: string
+  targetDayPlanId?: string
+  targetMenuMealId?: string
+  affectedMealIds: string[]
+  preservedMealIds: string[]
+  decisionCounts: Record<RegenerationDecisionKind, number>
+  fallbackSlots: MealSlot[]
+  decisions: RegenerationDecision[]
+  warnings: string[]
+  trace: {
+    fallbackAllowed: boolean
+    slots: Partial<Record<MealSlot, RecipePoolTrace>>
+  }
+  summaryMarkdown: string
+  confirmationMarkdown: string
+}
+
+export interface AppliedRegenerationPlanResult {
+  menu: WeeklyMenuView
+  plan: RegenerationPlan
   changeSummary: string
 }
 
@@ -557,11 +608,38 @@ export async function lockDay(dayPlanId: string, locked: boolean): Promise<DayPl
 }
 
 export async function regenerateWeek(menuId: string): Promise<WeeklyMenuView> {
+  return (await applyRegenerationPlan(await previewRegenerateWeekPlan(menuId))).menu
+}
+
+export async function previewRegenerateWeekPlan(menuId: string): Promise<RegenerationPlan> {
   const current = await getWeeklyMenu(menuId)
-  const { locked, lockedDays } = lockedItemsFromMenu(current)
-  const regenerated = await createWeeklyMenu(current.profileId, undefined, current.target, 'regenerate_week')
-  await applyLockedMeals(regenerated, locked, lockedDays)
-  return getWeeklyMenu(regenerated.id)
+  const profile = await profileForMenu(current)
+  const weekRecipes = await buildRecipesForWeek(profile, current.target)
+  const decisions: RegenerationDecision[] = []
+  for (const day of current.days) {
+    const generatedDay = weekRecipes.days[day.dayIndex] ?? []
+    for (const meal of day.meals) {
+      const generated = generatedDay.find((item) => item.slot === meal.slot)
+      if (day.locked || meal.locked || !generated) {
+        decisions.push(preserveDecision(day, meal, day.locked ? 'Día bloqueado preservado.' : meal.locked ? 'Comida bloqueada preservada.' : 'No se generó candidato válido para esta comida.'))
+        continue
+      }
+      decisions.push(replaceDecision(
+        day,
+        meal,
+        generated.recipe,
+        weekRecipes.fallbackSlots.includes(meal.slot) ? 'template' : 'llm',
+        'Receta regenerada desde el plan semanal previsualizado.',
+      ))
+    }
+  }
+  return regenerationPlanFromDecisions({
+    kind: 'week',
+    menu: current,
+    decisions,
+    fallbackSlots: weekRecipes.fallbackSlots,
+    trace: weekRecipes.trace,
+  })
 }
 
 export async function previewCalorieAdjustmentPlan(profileId: string, calories: number): Promise<CalorieAdjustmentPlan> {
@@ -641,36 +719,88 @@ export async function applyCalorieAdjustmentPlan(profileId: string, calories: nu
 }
 
 export async function regenerateDay(dayPlanId: string): Promise<WeeklyMenuView> {
-  const sql = sqlClient()
-  const [day] = await sql`select * from day_plans where id = ${dayPlanId} and user_id = ${localUserId()}`
-  if (!day) throw new Error('Día no encontrado.')
-  if (day.locked) return getWeeklyMenu(day.weekly_menu_id)
-  const menu = await getWeeklyMenu(day.weekly_menu_id)
-  const profile = (await listProfiles()).find((item) => item.id === menu.profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
-  const unlockedMeals = menu.days.find((item) => item.id === dayPlanId)?.meals.filter((meal) => !meal.locked) ?? []
-  for (const meal of unlockedMeals) await replaceMealWithGenerated(meal.id, profile, menu.target, day.day_index)
-  await recalculateMenuNutrition(menu.id)
-  return getWeeklyMenu(menu.id)
+  return (await applyRegenerationPlan(await previewRegenerateDayPlan(dayPlanId))).menu
 }
 
 export async function regenerateMeal(menuMealId: string): Promise<WeeklyMenuView> {
-  const sql = sqlClient()
-  const [row] = await sql`
-    select mm.*, dp.weekly_menu_id, dp.day_index, wm.profile_id
-    from menu_meals mm
-    join day_plans dp on dp.id = mm.day_plan_id
-    join weekly_menus wm on wm.id = dp.weekly_menu_id
-    where mm.id = ${menuMealId} and mm.user_id = ${localUserId()}
-  `
-  if (!row) throw new Error('Comida no encontrada.')
-  if (row.locked) return getWeeklyMenu(row.weekly_menu_id)
-  const menu = await getWeeklyMenu(row.weekly_menu_id)
-  const profile = (await listProfiles()).find((item) => item.id === row.profile_id)
-  if (!profile) throw new Error('Perfil no encontrado.')
-  await replaceMealWithGenerated(menuMealId, profile, menu.target, row.day_index)
-  await recalculateMenuNutrition(menu.id)
-  return getWeeklyMenu(menu.id)
+  return (await applyRegenerationPlan(await previewRegenerateMealPlan(menuMealId))).menu
+}
+
+export async function previewRegenerateDayPlan(dayPlanId: string): Promise<RegenerationPlan> {
+  const menu = await menuForDay(dayPlanId)
+  const day = menu.days.find((item) => item.id === dayPlanId)
+  if (!day) throw new Error('Día no encontrado.')
+  const profile = await profileForMenu(menu)
+  const decisions: RegenerationDecision[] = []
+  const traces: Partial<Record<MealSlot, RecipePoolTrace>> = {}
+  const fallbackSlots = new Set<MealSlot>()
+  for (const meal of day.meals) {
+    if (day.locked || meal.locked) {
+      decisions.push(preserveDecision(day, meal, day.locked ? 'Día bloqueado preservado.' : 'Comida bloqueada preservada.'))
+      continue
+    }
+    const candidate = await replacementDecisionForMeal(menu, day, meal, profile, `Regenera ${slotLabel(meal.slot)} con una receta nueva para este día, manteniendo variedad semanal.`)
+    decisions.push(candidate.decision)
+    traces[meal.slot] = candidate.trace
+    if (candidate.source !== 'llm') fallbackSlots.add(meal.slot)
+  }
+  return regenerationPlanFromDecisions({
+    kind: 'day',
+    menu,
+    targetDayPlanId: dayPlanId,
+    decisions,
+    fallbackSlots: [...fallbackSlots],
+    trace: {
+      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      slots: traces,
+    },
+  })
+}
+
+export async function previewRegenerateMealPlan(menuMealId: string): Promise<RegenerationPlan> {
+  const menu = await menuForMeal(menuMealId)
+  const day = menu.days.find((item) => item.meals.some((meal) => meal.id === menuMealId))
+  const meal = day?.meals.find((item) => item.id === menuMealId)
+  if (!day || !meal) throw new Error('Comida no encontrada.')
+  const profile = await profileForMenu(menu)
+  let decisions: RegenerationDecision[]
+  let trace: Partial<Record<MealSlot, RecipePoolTrace>> = {}
+  let fallbackSlots: MealSlot[] = []
+  if (day.locked || meal.locked) {
+    decisions = [preserveDecision(day, meal, day.locked ? 'Día bloqueado preservado.' : 'Comida bloqueada preservada.')]
+  } else {
+    const candidate = await replacementDecisionForMeal(menu, day, meal, profile, `Regenera ${slotLabel(meal.slot)} con una receta nueva, rica y coherente con el menú semanal.`)
+    decisions = [candidate.decision]
+    trace = { [meal.slot]: candidate.trace }
+    fallbackSlots = candidate.source === 'llm' ? [] : [meal.slot]
+  }
+  return regenerationPlanFromDecisions({
+    kind: 'meal',
+    menu,
+    targetDayPlanId: day.id,
+    targetMenuMealId: menuMealId,
+    decisions,
+    fallbackSlots,
+    trace: {
+      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      slots: trace,
+    },
+  })
+}
+
+export async function applyRegenerationPlan(plan: RegenerationPlan): Promise<AppliedRegenerationPlanResult> {
+  const current = await getWeeklyMenu(plan.baseMenuId)
+  if (current.profileId !== plan.profileId || currentMenuHash(toPlannerMenu(current)) !== plan.baseMenuHash) {
+    throw new Error('El menú cambió desde que preparé la regeneración. Vuelve a pedir el cambio para generar un plan actualizado.')
+  }
+  const menu = plan.kind === 'week'
+    ? await createWeeklyMenuFromRegenerationPlan(current, plan)
+    : await updateCurrentMenuFromRegenerationPlan(current, plan)
+  return {
+    menu,
+    plan,
+    changeSummary: summarizeRegenerationPlan(plan),
+  }
 }
 
 export async function suggestMealReplacements(menuMealId: string, request: string): Promise<ReplacementProposal> {
@@ -845,11 +975,8 @@ async function createWeeklyMenuFromCalorieAdjustmentPlan(
       .filter((decision) => decision.dayIndex === dayIndex)
       .sort((left, right) => mealSlots.indexOf(left.slot) - mealSlots.indexOf(right.slot))
     const [day] = await sql<[{ id: string }]>`
-      insert into day_plans (user_id, weekly_menu_id, day_index, locked, nutrition_snapshot)
-      values (
-        ${localUserId()}, ${menu.id}, ${dayIndex}, ${dayDecisions.some((decision) => decision.dayLocked)},
-        ${sql.json(sumNutrition(dayDecisions.map((decision) => decision.nutrition)) as any)}
-      )
+      insert into day_plans (user_id, weekly_menu_id, day_index, locked)
+      values (${localUserId()}, ${menu.id}, ${dayIndex}, ${dayDecisions.some((decision) => decision.dayLocked)})
       returning id
     `
     if (!day) throw new Error('No se pudo crear el día reajustado.')
@@ -867,6 +994,292 @@ async function createWeeklyMenuFromCalorieAdjustmentPlan(
 
   await recalculateMenuNutrition(menu.id)
   return getWeeklyMenu(menu.id)
+}
+
+async function createWeeklyMenuFromRegenerationPlan(
+  current: WeeklyMenuView,
+  plan: RegenerationPlan,
+): Promise<WeeklyMenuView> {
+  const sql = sqlClient()
+  const profile = await profileForMenu(current)
+  const targetId = await saveMacroTarget(current.profileId, current.target)
+  const plannedWeeklyNutrition = sumNutrition(plan.decisions.map((decision) => decision.nutrition))
+  const [menu] = await sql<[{ id: string }]>`
+    insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
+    values (
+      ${localUserId()}, ${current.profileId}, ${targetId}, ${currentWeekStart()}, ${current.locale}, 'completed',
+      ${sql.json(regenerationGenerationSettings(plan, plannedWeeklyNutrition) as any)},
+      ${sql.json(plannedWeeklyNutrition as any)}
+    )
+    returning id
+  `
+  if (!menu) throw new Error('No se pudo crear el menú regenerado.')
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayDecisions = plan.decisions
+      .filter((decision) => decision.dayIndex === dayIndex)
+      .sort((left, right) => mealSlots.indexOf(left.slot) - mealSlots.indexOf(right.slot))
+    const [day] = await sql<[{ id: string }]>`
+      insert into day_plans (user_id, weekly_menu_id, day_index, locked)
+      values (${localUserId()}, ${menu.id}, ${dayIndex}, ${dayDecisions.some((decision) => decision.dayLocked)})
+      returning id
+    `
+    if (!day) throw new Error('No se pudo crear el día regenerado.')
+
+    for (const decision of dayDecisions) {
+      const recipeId = await recipeIdForRegenerationDecision(profile, decision)
+      await sql`
+        insert into menu_meals (user_id, day_plan_id, recipe_id, slot, locked, nutrition_snapshot)
+        values (${localUserId()}, ${day.id}, ${recipeId}, ${decision.slot}, ${decision.locked}, ${sql.json(decision.nutrition as any)})
+      `
+    }
+  }
+
+  await recalculateMenuNutrition(menu.id)
+  return getWeeklyMenu(menu.id)
+}
+
+async function updateCurrentMenuFromRegenerationPlan(
+  current: WeeklyMenuView,
+  plan: RegenerationPlan,
+): Promise<WeeklyMenuView> {
+  const sql = sqlClient()
+  const profile = await profileForMenu(current)
+  for (const decision of plan.decisions) {
+    if (decision.kind === 'preserve_locked') continue
+    const recipeId = await recipeIdForRegenerationDecision(profile, decision)
+    await sql`
+      update menu_meals set recipe_id = ${recipeId}, nutrition_snapshot = ${sql.json(decision.nutrition as any)}
+      where id = ${decision.menuMealId} and user_id = ${localUserId()}
+    `
+  }
+  await sql`
+    update weekly_menus set generation_settings = ${sql.json({
+      ...current.generationSettings,
+      lastRegenerationPlan: regenerationGenerationSettings(plan, sumNutrition(plan.decisions.map((decision) => decision.nutrition))),
+    } as any)}
+    where id = ${current.id} and user_id = ${localUserId()}
+  `
+  await recalculateMenuNutrition(current.id)
+  return getWeeklyMenu(current.id)
+}
+
+async function recipeIdForRegenerationDecision(profile: ProfileRow, decision: RegenerationDecision): Promise<string> {
+  if (decision.kind === 'preserve_locked' && decision.existingRecipeId) return decision.existingRecipeId
+  const source = decision.source === 'llm' ? 'llm_regenerated' : 'template_regenerated'
+  return persistRecipe(scoreRecipe(decision.recipe, profile.bannedFoods), source)
+}
+
+async function replacementDecisionForMeal(
+  menu: WeeklyMenuView,
+  day: DayPlanView,
+  meal: MenuMealView,
+  profile: ProfileRow,
+  userRequest: string,
+): Promise<{ decision: RegenerationDecision; trace: RecipePoolTrace; source: 'llm' | 'template' }> {
+  const sameDayTitles = day.meals
+    .filter((item) => item.id !== meal.id)
+    .map((item) => item.recipe.title)
+  const pool = await recipePoolForSlot({
+    profile,
+    slot: meal.slot,
+    count: 8,
+    avoidFoods: profileAvoidedFoods(profile),
+    avoidTitles: [meal.recipe.title, ...sameDayTitles],
+    targetNutrition: targetNutritionForSlot(menu.target, meal.slot),
+    userRequest,
+    menuContext: compactMenuForGeneration(menu),
+  })
+  const candidate = chooseReplacementCandidate(pool.recipes, menu, day, meal, menu.target)
+  if (!candidate) throw new Error(`No encontré una receta válida para ${slotLabel(meal.slot)}.`)
+  return {
+    decision: replaceDecision(
+      day,
+      meal,
+      candidate.recipe,
+      candidate.source,
+      'Receta candidata generada y validada contra el día y la semana antes de confirmar.',
+    ),
+    trace: pool.trace,
+    source: candidate.source,
+  }
+}
+
+function regenerationPlanFromDecisions(input: {
+  kind: RegenerationPlanKind
+  menu: WeeklyMenuView
+  targetDayPlanId?: string
+  targetMenuMealId?: string
+  decisions: RegenerationDecision[]
+  fallbackSlots: MealSlot[]
+  trace: RegenerationPlan['trace']
+}): RegenerationPlan {
+  const decisionCounts = countRegenerationDecisions(input.decisions)
+  const warnings = regenerationWarnings(input.decisions, input.fallbackSlots)
+  const plannedWeeklyNutrition = sumNutrition(input.decisions.map((decision) => decision.nutrition))
+  const summaryMarkdown = regenerationPlanSummary({
+    kind: input.kind,
+    menu: input.menu,
+    decisions: input.decisions,
+    decisionCounts,
+    warnings,
+    plannedWeeklyNutrition,
+  })
+  return {
+    planId: randomUUID(),
+    kind: input.kind,
+    profileId: input.menu.profileId,
+    baseMenuId: input.menu.id,
+    baseMenuHash: currentMenuHash(toPlannerMenu(input.menu)),
+    targetDayPlanId: input.targetDayPlanId,
+    targetMenuMealId: input.targetMenuMealId,
+    affectedMealIds: input.decisions.filter((decision) => decision.kind !== 'preserve_locked').map((decision) => decision.menuMealId),
+    preservedMealIds: input.decisions.filter((decision) => decision.kind === 'preserve_locked').map((decision) => decision.menuMealId),
+    decisionCounts,
+    fallbackSlots: Array.from(new Set(input.fallbackSlots)),
+    decisions: input.decisions,
+    warnings,
+    trace: input.trace,
+    summaryMarkdown,
+    confirmationMarkdown: `${summaryMarkdown}\n\n¿Aplicar esta regeneración?`,
+  }
+}
+
+function preserveDecision(day: DayPlanView, meal: MenuMealView, reason: string): RegenerationDecision {
+  return {
+    dayIndex: day.dayIndex,
+    dayId: day.id,
+    dayLocked: day.locked,
+    slot: meal.slot,
+    menuMealId: meal.id,
+    locked: meal.locked,
+    kind: 'preserve_locked',
+    reason,
+    previousRecipeId: meal.recipe.id,
+    previousTitle: meal.recipe.title,
+    nextTitle: meal.recipe.title,
+    existingRecipeId: meal.recipe.id,
+    recipe: recipeCandidateFromRecipe(meal.recipe),
+    nutrition: meal.nutrition,
+    previousNutrition: meal.nutrition,
+    delta: diffNutrition(meal.nutrition, meal.nutrition),
+    source: 'existing',
+  }
+}
+
+function replaceDecision(
+  day: DayPlanView,
+  meal: MenuMealView,
+  recipe: RecipeCandidate & { nutrition?: NutritionTotals },
+  source: 'llm' | 'template',
+  reason: string,
+): RegenerationDecision {
+  const candidate = recipeCandidateFromRecipe(recipe)
+  const nutrition = recipe.nutrition ?? scoreRecipe(candidate).nutrition
+  return {
+    dayIndex: day.dayIndex,
+    dayId: day.id,
+    dayLocked: day.locked,
+    slot: meal.slot,
+    menuMealId: meal.id,
+    locked: meal.locked,
+    kind: 'recipe_replacement',
+    reason,
+    previousRecipeId: meal.recipe.id,
+    previousTitle: meal.recipe.title,
+    nextTitle: candidate.title,
+    recipe: candidate,
+    nutrition,
+    previousNutrition: meal.nutrition,
+    delta: diffNutrition(nutrition, meal.nutrition),
+    source,
+  }
+}
+
+function recipeCandidateFromRecipe(recipe: RecipeView | RecipeCandidate): RecipeCandidate {
+  return {
+    title: recipe.title,
+    locale: recipe.locale === 'en' ? 'en' : 'es',
+    description: recipe.description,
+    servings: 1,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cuisine: recipe.cuisine,
+    flavorProfile: recipe.flavorProfile,
+    tags: [...recipe.tags],
+    ingredients: recipe.ingredients.map((ingredient) => ({
+      name: ingredient.name,
+      amount: ingredient.amount,
+      unit: ingredient.unit,
+      preparation: ingredient.preparation ?? undefined,
+    })),
+    steps: [...recipe.steps],
+  }
+}
+
+function countRegenerationDecisions(decisions: RegenerationDecision[]): Record<RegenerationDecisionKind, number> {
+  return {
+    recipe_replacement: decisions.filter((decision) => decision.kind === 'recipe_replacement').length,
+    preserve_locked: decisions.filter((decision) => decision.kind === 'preserve_locked').length,
+  }
+}
+
+function regenerationWarnings(decisions: RegenerationDecision[], fallbackSlots: MealSlot[]): string[] {
+  const warnings: string[] = []
+  const locked = decisions.filter((decision) => decision.kind === 'preserve_locked').length
+  if (locked > 0) warnings.push(`${locked} comida(s) bloqueadas se conservarán exactamente.`)
+  if (fallbackSlots.length > 0) {
+    warnings.push(`Se usó fallback determinístico en ${Array.from(new Set(fallbackSlots)).map(slotLabel).join(', ')} porque no hubo suficientes candidatos LLM válidos.`)
+  }
+  return warnings
+}
+
+function regenerationPlanSummary(input: {
+  kind: RegenerationPlanKind
+  menu: WeeklyMenuView
+  decisions: RegenerationDecision[]
+  decisionCounts: Record<RegenerationDecisionKind, number>
+  warnings: string[]
+  plannedWeeklyNutrition: NutritionTotals
+}): string {
+  const changed = input.decisions.filter((decision) => decision.kind === 'recipe_replacement')
+  const weeklyDelta = diffNutrition(input.plannedWeeklyNutrition, input.menu.nutrition)
+  const scope = input.kind === 'week' ? 'la semana' : input.kind === 'day' ? 'el día' : 'la comida'
+  const replacements = changed
+    .slice(0, 6)
+    .map((decision) => `- ${dayName(decision.dayIndex)} ${slotLabel(decision.slot)}: ${decision.previousTitle} -> ${decision.nextTitle} (${formatSigned(decision.delta.calories)} kcal)`)
+  const lines = [
+    `Preparé una regeneración de **${scope}**. Todavía no he cambiado el menú.`,
+    `**Cambios previstos:** ${input.decisionCounts.recipe_replacement} reemplazo(s); ${input.decisionCounts.preserve_locked} comida(s) preservadas por lock o falta de candidato válido.`,
+    `**Impacto semanal estimado:** ${formatSigned(weeklyDelta.calories)} kcal, ${formatSigned(weeklyDelta.proteinG)} g proteína, ${formatSigned(weeklyDelta.carbsG)} g carbos, ${formatSigned(weeklyDelta.fatG)} g grasa.`,
+  ]
+  if (replacements.length > 0) lines.push(`**Recetas que cambiarían:**\n${replacements.join('\n')}`)
+  if (input.warnings.length > 0) lines.push(`**Avisos:**\n${input.warnings.map((warning) => `- ${warning}`).join('\n')}`)
+  lines.push('Si el menú cambia antes de confirmar, rechazaré este plan y pediré una nueva previsualización.')
+  return lines.join('\n\n')
+}
+
+function summarizeRegenerationPlan(plan: RegenerationPlan): string {
+  return plan.summaryMarkdown
+    .replace('Preparé una regeneración', 'Apliqué una regeneración')
+    .replace('Todavía no he cambiado el menú.', 'El menú ya quedó actualizado.')
+    .replace('Recetas que cambiarían:', 'Recetas reemplazadas:')
+}
+
+function regenerationGenerationSettings(plan: RegenerationPlan, plannedWeeklyNutrition: NutritionTotals): Record<string, unknown> {
+  return {
+    kind: 'regeneration_plan',
+    regenerationKind: plan.kind,
+    planId: plan.planId,
+    baseMenuId: plan.baseMenuId,
+    baseMenuHash: plan.baseMenuHash,
+    decisionCounts: plan.decisionCounts,
+    fallbackSlots: plan.fallbackSlots,
+    fallbackAllowed: plan.trace.fallbackAllowed,
+    recipeSource: plan.fallbackSlots.length === 0 ? 'llm' : plan.fallbackSlots.length === mealSlots.length ? 'template' : 'mixed',
+    plannedWeeklyNutrition,
+    warnings: plan.warnings,
+    trace: plan.trace,
+  }
 }
 
 async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): Promise<{
@@ -1210,6 +1623,14 @@ function slotLabel(slot: MealSlot): string {
   return 'snack'
 }
 
+function dayName(dayIndex: number): string {
+  return ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'][dayIndex] ?? `Día ${dayIndex + 1}`
+}
+
+function formatSigned(value: number): string {
+  return `${value > 0 ? '+' : ''}${round(value)}`
+}
+
 function scaleRecipe(recipe: RecipeCandidate, factor: number): RecipeCandidate {
   return {
     ...recipe,
@@ -1355,37 +1776,6 @@ function currentWeekStart(): string {
   return monday.toISOString().slice(0, 10)
 }
 
-async function applyLockedMeals(menu: WeeklyMenuView, locked: Map<string, MenuMealView>, lockedDays: Set<number>): Promise<void> {
-  const sql = sqlClient()
-  for (const day of menu.days) {
-    if (lockedDays.has(day.dayIndex)) {
-      await sql`update day_plans set locked = true where id = ${day.id} and user_id = ${localUserId()}`
-    }
-    for (const meal of day.meals) {
-      const previous = locked.get(`${day.dayIndex}:${meal.slot}`)
-      if (!previous) continue
-      await sql`
-        update menu_meals
-        set recipe_id = ${previous.recipe.id}, locked = ${previous.locked}, nutrition_snapshot = ${sql.json(previous.nutrition as any)}
-        where id = ${meal.id} and user_id = ${localUserId()}
-      `
-    }
-  }
-  await recalculateMenuNutrition(menu.id)
-}
-
-function lockedItemsFromMenu(menu: WeeklyMenuView): { locked: Map<string, MenuMealView>; lockedDays: Set<number> } {
-  const locked = new Map<string, MenuMealView>()
-  const lockedDays = new Set<number>()
-  for (const day of menu.days) {
-    if (day.locked) lockedDays.add(day.dayIndex)
-    for (const meal of day.meals) {
-      if (day.locked || meal.locked) locked.set(`${day.dayIndex}:${meal.slot}`, meal)
-    }
-  }
-  return { locked, lockedDays }
-}
-
 function retargetCalories(target: MacroTargets, calories: number): MacroTargets {
   const requiredCalories = target.proteinG * 4 + target.fatG * 9
   const carbsG = requiredCalories >= calories ? 0 : roundToNearest((calories - requiredCalories) / 4, 5)
@@ -1397,35 +1787,6 @@ function retargetCalories(target: MacroTargets, calories: number): MacroTargets 
     preset: target.preset,
     notes: unique([...target.notes, 'Objetivo calórico ajustado manualmente desde el chat.']),
   }
-}
-
-async function replaceMealWithGenerated(menuMealId: string, profile: ProfileRow, target: MacroTargets, dayIndex: number): Promise<void> {
-  const menu = await menuForMeal(menuMealId)
-  const day = menu.days.find((item) => item.meals.some((meal) => meal.id === menuMealId))
-  const meal = day?.meals.find((item) => item.id === menuMealId)
-  if (!day || !meal) return
-  const avoidTitles = [
-    meal.recipe.title,
-    ...day.meals.filter((item) => item.id !== meal.id).map((item) => item.recipe.title),
-  ]
-  const pool = await recipePoolForSlot({
-    profile,
-    slot: meal.slot,
-    count: 8,
-    avoidFoods: profileAvoidedFoods(profile),
-    avoidTitles,
-    targetNutrition: targetNutritionForSlot(target, meal.slot),
-    userRequest: `Regenera ${slotLabel(meal.slot)} con una receta nueva, rica y coherente con el menú semanal.`,
-    menuContext: compactMenuForGeneration(menu),
-  })
-  const candidate = chooseReplacementCandidate(pool.recipes, menu, day, meal, target)
-  if (!candidate) return
-  const recipeId = await persistRecipe(candidate.recipe, candidate.source === 'llm' ? 'llm_regenerated' : 'template_regenerated')
-  const sql = sqlClient()
-  await sql`
-    update menu_meals set recipe_id = ${recipeId}, nutrition_snapshot = ${sql.json(candidate.recipe.nutrition as any)}
-    where id = ${menuMealId} and user_id = ${localUserId()}
-  `
 }
 
 async function recalculateMenuNutrition(menuId: string): Promise<void> {
@@ -1445,6 +1806,23 @@ async function menuForMeal(menuMealId: string): Promise<WeeklyMenuView> {
   `
   if (!row) throw new Error('Comida no encontrada.')
   return getWeeklyMenu(row.weekly_menu_id)
+}
+
+async function menuForDay(dayPlanId: string): Promise<WeeklyMenuView> {
+  const sql = sqlClient()
+  const [row] = await sql`
+    select weekly_menu_id
+    from day_plans
+    where id = ${dayPlanId} and user_id = ${localUserId()}
+  `
+  if (!row) throw new Error('Día no encontrado.')
+  return getWeeklyMenu(row.weekly_menu_id)
+}
+
+async function profileForMenu(menu: WeeklyMenuView): Promise<ProfileRow> {
+  const profile = (await listProfiles()).find((item) => item.id === menu.profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  return profile
 }
 
 function parseReplacementRequest(request: string, menu: WeeklyMenuView, meal: MenuMealView): ReplacementRequestFeatures {

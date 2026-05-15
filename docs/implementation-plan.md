@@ -352,6 +352,8 @@ Acceptance:
 - MCP server starts locally.
 - Read tools can list profiles and inspect a weekly menu.
 - Proposal tools can suggest replacements or regeneration previews.
+- Regeneration previews are server-owned plans with exact candidate recipes, base menu hash, affected/preserved meal IDs, warnings, and Spanish confirmation copy.
+- Regeneration mutations can apply the previewed plan exactly and reject it if the menu changed before confirmation.
 - Mutation tools enforce confirmation expectations at the service boundary.
 - Skill file exists and matches the tool contract.
 

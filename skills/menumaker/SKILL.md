@@ -53,9 +53,11 @@ For recipe generation:
 For regeneration:
 
 1. Check locks.
-2. Preview if the user has not clearly requested regeneration.
-3. Regenerate only after confirmation.
-4. Report what changed and whether locks were preserved.
+2. Use `preview_regenerate_meal`, `preview_regenerate_day`, or `preview_regenerate_week` before mutation.
+3. Present the returned plan summary: replacements, preserved locks, macro impact, warnings, and stale-plan rule.
+4. Regenerate only after confirmation, passing the previewed plan to the matching mutation tool.
+5. If apply rejects the plan because the menu changed, create a fresh preview instead of retrying the stale plan.
+6. Report what changed and whether locks were preserved.
 
 For calorie target changes:
 

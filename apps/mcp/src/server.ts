@@ -22,9 +22,9 @@ import {
   listProfiles,
   lockDay,
   lockMeal,
-  regenerateDay,
-  regenerateMeal,
-  regenerateWeek,
+  previewRegenerateDayPlan,
+  previewRegenerateMealPlan,
+  previewRegenerateWeekPlan,
   replaceMeal,
   saveMacroTarget,
   saveProfilePreference,
@@ -378,56 +378,43 @@ server.registerTool(
 server.registerTool(
   'preview_regenerate_meal',
   {
-    description: 'Proposal: preview regenerating one meal. Does not mutate state.',
+    description: 'Proposal: build a server-owned plan for regenerating one meal, including exact candidate recipe, menu hash, expected macro impact, and Spanish confirmation copy. Does not mutate state.',
     inputSchema: { menuMealId: z.string().uuid() },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  async ({ menuMealId }) => {
-    const state = await getAppState()
-    const meal = state.currentMenu?.days.flatMap((day) => day.meals).find((item) => item.id === menuMealId)
-    return json({
-      proposalId: crypto.randomUUID(),
-      menuMealId,
-      canRegenerate: meal ? !meal.locked : null,
-      currentRecipe: meal?.recipe.title,
-      requiresConfirmation: true,
-    })
-  },
+  async ({ menuMealId }) => json({
+    type: 'regeneration_plan',
+    requiresConfirmation: true,
+    plan: await previewRegenerateMealPlan(menuMealId),
+  }),
 )
 
 server.registerTool(
   'preview_regenerate_day',
   {
-    description: 'Proposal: preview regenerating one day. Does not mutate state.',
+    description: 'Proposal: build a server-owned plan for regenerating one day, preserving locks and carrying exact candidate recipes plus menu hash. Does not mutate state.',
     inputSchema: { dayPlanId: z.string().uuid() },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  async ({ dayPlanId }) => {
-    const state = await getAppState()
-    const day = state.currentMenu?.days.find((item) => item.id === dayPlanId)
-    return json({
-      proposalId: crypto.randomUUID(),
-      dayPlanId,
-      canRegenerate: day ? !day.locked : null,
-      lockedMealsPreserved: day?.meals.filter((meal) => meal.locked).map((meal) => meal.id) ?? [],
-      requiresConfirmation: true,
-    })
-  },
+  async ({ dayPlanId }) => json({
+    type: 'regeneration_plan',
+    requiresConfirmation: true,
+    plan: await previewRegenerateDayPlan(dayPlanId),
+  }),
 )
 
 server.registerTool(
   'preview_regenerate_week',
   {
-    description: 'Proposal: describe week regeneration. Does not mutate state.',
+    description: 'Proposal: build a server-owned plan for regenerating the week, preserving locks and carrying exact candidate recipes plus menu hash. Does not mutate state.',
     inputSchema: { menuId: z.string().uuid() },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async ({ menuId }) =>
     json({
-      proposalId: crypto.randomUUID(),
-      menuId,
-      willPreserve: ['locked meals', 'locked days'],
+      type: 'regeneration_plan',
       requiresConfirmation: true,
+      plan: await previewRegenerateWeekPlan(menuId),
     }),
 )
 
@@ -650,39 +637,39 @@ server.registerTool(
 server.registerTool(
   'regenerate_meal',
   {
-    description: 'Mutation: regenerate one unlocked meal.',
-    inputSchema: { menuMealId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
+    description: 'Mutation: apply a server-owned regeneration preview for one meal. Pass the preview plan when available; stale plans are rejected.',
+    inputSchema: { menuMealId: z.string().uuid(), profileId: z.string().uuid().optional(), plan: z.any().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ menuMealId, profileId, confirmed }) => {
+  async ({ menuMealId, profileId, plan, confirmed }) => {
     requireConfirmation(confirmed, 'meal regeneration')
-    return json(await executeAppAction('regenerateMeal', { menuMealId, profileId }))
+    return json(await executeAppAction('regenerateMeal', { menuMealId, profileId, plan }))
   },
 )
 
 server.registerTool(
   'regenerate_day',
   {
-    description: 'Mutation: regenerate one unlocked day while preserving locked meals.',
-    inputSchema: { dayPlanId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
+    description: 'Mutation: apply a server-owned regeneration preview for one day while preserving locked meals. Pass the preview plan when available; stale plans are rejected.',
+    inputSchema: { dayPlanId: z.string().uuid(), profileId: z.string().uuid().optional(), plan: z.any().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ dayPlanId, profileId, confirmed }) => {
+  async ({ dayPlanId, profileId, plan, confirmed }) => {
     requireConfirmation(confirmed, 'day regeneration')
-    return json(await executeAppAction('regenerateDay', { dayPlanId, profileId }))
+    return json(await executeAppAction('regenerateDay', { dayPlanId, profileId, plan }))
   },
 )
 
 server.registerTool(
   'regenerate_week',
   {
-    description: 'Mutation: regenerate the week while preserving locked days and meals.',
-    inputSchema: { menuId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
+    description: 'Mutation: apply a server-owned regeneration preview for the week while preserving locked days and meals. Pass the preview plan when available; stale plans are rejected.',
+    inputSchema: { menuId: z.string().uuid(), profileId: z.string().uuid().optional(), plan: z.any().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ menuId, profileId, confirmed }) => {
+  async ({ menuId, profileId, plan, confirmed }) => {
     requireConfirmation(confirmed, 'week regeneration')
-    return json(await executeAppAction('regenerateWeek', { menuId, profileId }))
+    return json(await executeAppAction('regenerateWeek', { menuId, profileId, plan }))
   },
 )
 

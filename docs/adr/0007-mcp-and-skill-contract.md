@@ -76,6 +76,9 @@ Mutation tools:
 - `apply_similar_replacements`
 - `lock_meal`
 - `lock_day`
+- `regenerate_meal`
+- `regenerate_day`
+- `regenerate_week`
 - `star_recipe`
 - `unstar_recipe`
 - `save_profile_preference`
@@ -91,8 +94,21 @@ Mutation tools require explicit user confirmation unless the user's latest instr
 
 Broad or persistent changes should use a two-step flow:
 
-1. Proposal tool returns a `proposal_id`, affected items, macro impact, preference impact, and warnings.
-2. Mutation tool applies the `proposal_id` after user confirmation.
+1. Proposal tool returns a server-owned preview payload, affected items, macro impact, preference impact, warnings, and Spanish confirmation copy.
+2. Mutation tool applies the preview payload after user confirmation.
+
+Regeneration preview tools must return an exact `RegenerationPlan`:
+
+- `planId`
+- `baseMenuId`
+- `baseMenuHash`
+- affected and preserved meal IDs
+- per-meal decisions and candidate recipes
+- decision counts
+- estimated weekly macro impact
+- warnings
+
+`regenerate_meal`, `regenerate_day`, and `regenerate_week` should receive that plan when available. Apply must reject stale plans if the menu hash differs from the previewed base menu.
 
 Examples:
 
@@ -113,6 +129,7 @@ Every mutation should return:
 - Nutrition confidence warnings when relevant.
 - Next suggested action, if useful.
 - For calorie target changes: counts of portion resizes, ingredient rebalances, recipe replacements, preserved locks, weekly impact, daily warnings, and a Spanish explanation summary.
+- For regeneration: counts of recipe replacements and preserved locks, recipe titles changed, weekly impact, warnings, and whether the exact previewed plan was applied.
 
 Mutation tools should be idempotent where practical.
 

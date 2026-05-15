@@ -145,6 +145,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Meal regeneration control exists.
 - [x] Day regeneration control exists.
 - [x] Week regeneration control exists.
+- [x] Regeneration previews are server-owned plans and confirmed regeneration applies the exact previewed plan or rejects stale state.
 - [x] Nutrition confidence indicators appear when relevant.
 
 ## 10. Meal Detail And Editing
