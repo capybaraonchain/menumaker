@@ -125,6 +125,7 @@ type RemediationPlan = {
 type PreferenceRelaxationRequest = { job: GenerationJob; plan: RemediationPlan }
 type IngredientMappingRequest = { job: GenerationJob; plan: RemediationPlan }
 type FallbackPolicyRequest = { job: GenerationJob; plan: RemediationPlan }
+type TargetEditRequest = { job: GenerationJob; plan: RemediationPlan }
 type ReplacementProposal = {
   proposalId: string
   affectedMeals: string[]
@@ -167,6 +168,7 @@ export default function App() {
   const [preferenceRelaxation, setPreferenceRelaxation] = useState<PreferenceRelaxationRequest | null>(null)
   const [ingredientMapping, setIngredientMapping] = useState<IngredientMappingRequest | null>(null)
   const [fallbackPolicyRequest, setFallbackPolicyRequest] = useState<FallbackPolicyRequest | null>(null)
+  const [targetEditRequest, setTargetEditRequest] = useState<TargetEditRequest | null>(null)
   const [creatingProfile, setCreatingProfile] = useState(false)
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
@@ -272,6 +274,7 @@ export default function App() {
             onRelaxPreferences={setPreferenceRelaxation}
             onReviewIngredients={setIngredientMapping}
             onFallbackPolicy={setFallbackPolicyRequest}
+            onAdjustTargets={setTargetEditRequest}
           />
         )}
         {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
@@ -406,6 +409,16 @@ export default function App() {
           settings={state.runtimeSettings}
           onAction={postAction}
           onClose={() => setFallbackPolicyRequest(null)}
+        />
+      )}
+
+      {targetEditRequest && state.activeProfile && (
+        <TargetEditModal
+          profile={state.activeProfile}
+          job={targetEditRequest.job}
+          plan={targetEditRequest.plan}
+          onAction={postAction}
+          onClose={() => setTargetEditRequest(null)}
         />
       )}
 
@@ -557,6 +570,7 @@ function WeekScreen({
   onRelaxPreferences,
   onReviewIngredients,
   onFallbackPolicy,
+  onAdjustTargets,
 }: {
   state: AppState
   busy: string | null
@@ -566,12 +580,13 @@ function WeekScreen({
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
   onFallbackPolicy: (request: FallbackPolicyRequest) => void
+  onAdjustTargets: (request: TargetEditRequest) => void
 }) {
   const menu = state.currentMenu
   if (!menu) {
     return (
       <div className="week-screen">
-        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} compact={false} />
+        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} onAdjustTargets={onAdjustTargets} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
         {state.activeProfile?.latestTarget && (
           <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
@@ -597,7 +612,7 @@ function WeekScreen({
         <span>Confianza {menu.target.confidence}</span>
       </section>
       <GenerationNotice menu={menu} profileId={state.activeProfile?.id} onAction={onAction} />
-      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} compact />
+      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} onAdjustTargets={onAdjustTargets} compact />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -758,6 +773,7 @@ function GenerationJobsPanel({
   onRelaxPreferences,
   onReviewIngredients,
   onFallbackPolicy,
+  onAdjustTargets,
   compact = false,
 }: {
   jobs: GenerationJob[]
@@ -767,6 +783,7 @@ function GenerationJobsPanel({
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
   onFallbackPolicy: (request: FallbackPolicyRequest) => void
+  onAdjustTargets: (request: TargetEditRequest) => void
   compact?: boolean
 }) {
   const visibleJobs = jobs
@@ -801,6 +818,7 @@ function GenerationJobsPanel({
                   onRelaxPreferences={onRelaxPreferences}
                   onReviewIngredients={onReviewIngredients}
                   onFallbackPolicy={onFallbackPolicy}
+                  onAdjustTargets={onAdjustTargets}
                 />
               )}
             </div>
@@ -830,6 +848,7 @@ function JobRemediation({
   onRelaxPreferences,
   onReviewIngredients,
   onFallbackPolicy,
+  onAdjustTargets,
 }: {
   job: GenerationJob
   plan: RemediationPlan
@@ -839,6 +858,7 @@ function JobRemediation({
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
   onFallbackPolicy: (request: FallbackPolicyRequest) => void
+  onAdjustTargets: (request: TargetEditRequest) => void
 }) {
   const hasPreferencesToRelax = Boolean(profile && (profile.dislikes.length > 0 || profile.bannedFoods.length > 0))
   return (
@@ -877,6 +897,13 @@ function JobRemediation({
             if (action.kind === 'enable_fallback') {
               return (
                 <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onFallbackPolicy({ job, plan })}>
+                  {action.label}
+                </button>
+              )
+            }
+            if (action.kind === 'adjust_targets') {
+              return (
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onAdjustTargets({ job, plan })}>
                   {action.label}
                 </button>
               )
@@ -1121,6 +1148,87 @@ function FallbackPolicyModal({
         <div className="modal-actions">
           <button className="primary" type="button" disabled={localBusy || (!recipeFallback && !skeletonFallback)} onClick={apply}>
             <Save size={16} /> {localBusy ? 'Aplicando...' : retryAfterSave ? 'Guardar y reintentar' : 'Guardar política'}
+          </button>
+          <button className="secondary" type="button" disabled={localBusy} onClick={onClose}>
+            <X size={16} /> Cancelar
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function TargetEditModal({
+  profile,
+  job,
+  plan,
+  onAction,
+  onClose,
+}: {
+  profile: Profile
+  job: GenerationJob
+  plan: RemediationPlan
+  onAction: (payload: any) => Promise<any>
+  onClose: () => void
+}) {
+  const target = profile.latestTarget ?? {}
+  const [calories, setCalories] = useState(String(target.calories ?? 1850))
+  const [proteinG, setProteinG] = useState(String(target.proteinG ?? ''))
+  const [carbsG, setCarbsG] = useState(String(target.carbsG ?? ''))
+  const [fatG, setFatG] = useState(String(target.fatG ?? ''))
+  const [runNow, setRunNow] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [localBusy, setLocalBusy] = useState(false)
+
+  async function apply() {
+    const nextCalories = Number(calories)
+    const nextProtein = proteinG.trim() ? Number(proteinG) : undefined
+    const nextCarbs = carbsG.trim() ? Number(carbsG) : undefined
+    const nextFat = fatG.trim() ? Number(fatG) : undefined
+    if (!Number.isFinite(nextCalories)) {
+      setError('Escribe un objetivo calórico válido.')
+      return
+    }
+    setLocalBusy(true)
+    setError(null)
+    try {
+      await onAction({
+        action: 'updateMacroTargetAndGenerate',
+        profileId: profile.id,
+        calories: Math.round(nextCalories),
+        proteinG: nextProtein,
+        carbsG: nextCarbs,
+        fatG: nextFat,
+        runNow,
+        retryJobId: job.id,
+      })
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo guardar el objetivo.')
+    } finally {
+      setLocalBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Ajustar objetivo" onClose={onClose}>
+      <div className="remediation-modal">
+        <p>{plan.summary}</p>
+        <p className="muted">Guarda un nuevo objetivo y lanza una generación semanal con ese target. Si dejas proteína, carbohidratos o grasa vacíos, la app conserva el valor actual o recalcula carbohidratos cuando sea necesario.</p>
+        <div className="source-grid macros">
+          <label>kcal/día<input value={calories} inputMode="numeric" onChange={(event) => setCalories(event.target.value)} /></label>
+          <label>Proteína g<input value={proteinG} inputMode="decimal" onChange={(event) => setProteinG(event.target.value)} /></label>
+          <label>Carbos g<input value={carbsG} inputMode="decimal" onChange={(event) => setCarbsG(event.target.value)} /></label>
+          <label>Grasa g<input value={fatG} inputMode="decimal" onChange={(event) => setFatG(event.target.value)} /></label>
+        </div>
+        <label className="checkline">
+          <input type="checkbox" checked={runNow} onChange={(event) => setRunNow(event.target.checked)} />
+          Guardar y generar una semana nueva ahora
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button className="primary" type="button" disabled={localBusy} onClick={apply}>
+            <Save size={16} /> {localBusy ? 'Aplicando...' : runNow ? 'Guardar y generar' : 'Guardar objetivo'}
           </button>
           <button className="secondary" type="button" disabled={localBusy} onClick={onClose}>
             <X size={16} /> Cancelar

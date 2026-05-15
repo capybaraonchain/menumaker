@@ -60,6 +60,7 @@ const pendingActionNames = [
   'deleteProfile',
   'retryGenerationJob',
   'relaxProfilePreferences',
+  'updateMacroTargetAndGenerate',
   'startWeeklyMenuGeneration',
   'runGenerationJob',
   'setFallbackPolicy',
@@ -789,6 +790,28 @@ server.registerTool(
     if (conflict.impossible) throw new Error(conflict.messageEs)
     const targetId = await saveMacroTarget(profileId, targets)
     return json({ changed: true, profileId, targetId, target: targets })
+  },
+)
+
+server.registerTool(
+  'update_macro_target_and_generate',
+  {
+    description: 'Mutation: save a revised macro target and enqueue or run a new weekly generation job. Useful for target-edit remediation. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      calories: z.number().int().min(900).max(5000),
+      proteinG: z.number().nonnegative().optional(),
+      carbsG: z.number().nonnegative().optional(),
+      fatG: z.number().nonnegative().optional(),
+      runNow: z.boolean().default(true),
+      retryJobId: z.string().uuid().optional(),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, calories, proteinG, carbsG, fatG, runNow, retryJobId, confirmed }) => {
+    requireConfirmation(confirmed, 'macro target update and generation')
+    return json(await executeAppAction('updateMacroTargetAndGenerate', { profileId, calories, proteinG, carbsG, fatG, runNow, retryJobId }, 'mcp'))
   },
 )
 

@@ -253,6 +253,7 @@ Acceptance:
 - Chat responses can report cache hits without exposing provider tokens.
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
 - Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
+- Impossible-target failures can open a guided target-edit modal that saves revised macro targets and starts a new weekly generation through `updateMacroTargetAndGenerate`.
 - Low-confidence or ambiguous-ingredient failures can save a mapping and retry the generation without bypassing deterministic nutrition.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
 

@@ -116,3 +116,22 @@ test('failure UI has guided fallback remediation instead of direct fallback muta
   assert.match(webPage, /Guardar y reintentar este trabajo/)
   assert.match(webPage, /action: 'setFallbackPolicy'/)
 })
+
+test('target remediation saves revised macro targets through shared actions and MCP', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+  const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
+
+  assert.match(appService, /export async function updateMacroTargetAndGenerate/)
+  assert.match(appService, /saveMacroTarget\(profileId, target\)/)
+  assert.match(appService, /enqueueWeeklyMenuGenerationJob\(profileId, targetId, target, 'target_remediation_generation'\)/)
+  assert.match(appActions, /updateMacroTargetAndGenerate: z\.object/)
+  assert.match(appActions, /auditLabel: 'mutation\.update_macro_target_and_generate'/)
+  assert.match(mcp, /'update_macro_target_and_generate'/)
+  assert.match(apiRoute, /updateMacroTargetAndGenerate: 'updateMacroTargetAndGenerate'/)
+  assert.match(webPage, /function TargetEditModal/)
+  assert.match(webPage, /action: 'updateMacroTargetAndGenerate'/)
+  assert.match(webPage, /onAdjustTargets\(\{ job, plan \}\)/)
+})

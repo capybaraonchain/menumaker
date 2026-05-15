@@ -27,9 +27,11 @@ import {
   suggestMealReplacements,
   unstarRecipe,
   previewCalorieAdjustmentPlan,
+  updateMacroTargetAndGenerate,
   type RegenerationPlan,
   type PreviewGenerationJobInput,
   type UserNutritionFoodInput,
+  type MacroTargetEditInput,
 } from './appService'
 import type { CalorieAdjustmentPlan } from './caloriePlanner'
 import { sqlClient } from './client'
@@ -145,6 +147,15 @@ export const appActionSchemas = {
     profileId: uuid,
     removeDislikes: z.array(z.string()).default([]),
     removeBannedFoods: z.array(z.string()).default([]),
+  }),
+  updateMacroTargetAndGenerate: z.object({
+    profileId: uuid,
+    calories: z.number().int().min(900).max(5000),
+    proteinG: z.number().nonnegative().optional(),
+    carbsG: z.number().nonnegative().optional(),
+    fatG: z.number().nonnegative().optional(),
+    runNow: z.boolean().default(true),
+    retryJobId: uuid.optional(),
   }),
   startWeeklyMenuGeneration: z.object({
     profileId: uuid,
@@ -714,6 +725,33 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  updateMacroTargetAndGenerate: {
+    name: 'updateMacroTargetAndGenerate',
+    inputSchema: appActionSchemas.updateMacroTargetAndGenerate,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.update_macro_target_and_generate',
+    confirmationCopyEs: (input) => [
+      `Se guardará un nuevo objetivo de **${input.calories} kcal/día**.`,
+      input.proteinG === undefined ? '' : `Proteína: **${input.proteinG} g**.`,
+      input.fatG === undefined ? '' : `Grasa: **${input.fatG} g**.`,
+      input.carbsG === undefined ? '' : `Carbohidratos: **${input.carbsG} g**.`,
+      input.runNow ? 'Después se lanzará una nueva generación semanal.' : 'La generación quedará en cola para ejecutarse después.',
+      '¿Continuar?',
+    ].filter(Boolean).join('\n\n'),
+    successCopyEs: (input, result) => {
+      const job = result && typeof result === 'object' ? (result as { job?: { id?: string } }).job : null
+      return input.runNow
+        ? `Listo. Guardé el objetivo de **${input.calories} kcal/día** y ejecuté una nueva generación.`
+        : `Listo. Guardé el objetivo de **${input.calories} kcal/día** y dejé la generación en cola${job?.id ? ` (${job.id})` : ''}.`
+    },
+    async execute(input) {
+      const result = await updateMacroTargetAndGenerate(input.profileId, input as MacroTargetEditInput)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
   startWeeklyMenuGeneration: {
     name: 'startWeeklyMenuGeneration',
     inputSchema: appActionSchemas.startWeeklyMenuGeneration,
@@ -957,6 +995,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'retryGenerationJob') return 'Reintentar generación'
   if (name === 'cancelGenerationJob') return 'Cancelar generación'
   if (name === 'relaxProfilePreferences') return 'Relajar preferencias'
+  if (name === 'updateMacroTargetAndGenerate') return `Guardar ${params.calories} kcal y generar`
   if (name === 'startWeeklyMenuGeneration') return 'Generar semana'
   if (name === 'runGenerationJob') return 'Ejecutar generación'
   return 'Continuar'

@@ -240,6 +240,15 @@ export interface UserNutritionFoodInput {
   }>
 }
 
+export interface MacroTargetEditInput {
+  calories: number
+  proteinG?: number
+  carbsG?: number
+  fatG?: number
+  runNow?: boolean
+  retryJobId?: string
+}
+
 export interface ChatCommandPlanningInput {
   message: string
   locale: Locale
@@ -1144,6 +1153,33 @@ export async function saveMacroTarget(profileId: string, targets: MacroTargets):
   `
   if (!row) throw new Error('No se pudo guardar el objetivo de macros.')
   return row.id
+}
+
+export async function updateMacroTargetAndGenerate(profileId: string, input: MacroTargetEditInput): Promise<{
+  targetId: string
+  target: MacroTargets
+  job: GenerationJobView
+  menu?: WeeklyMenuView
+}> {
+  const sql = sqlClient()
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  if (!profile.latestTarget) throw new Error('El perfil no tiene un objetivo base para editar.')
+  const target = editedMacroTarget(profile.latestTarget, input)
+  const targetId = await saveMacroTarget(profileId, target)
+  const job = await enqueueWeeklyMenuGenerationJob(profileId, targetId, target, 'target_remediation_generation')
+  if (input.retryJobId) {
+    await sql`
+      update generation_jobs
+      set retry_count = retry_count + 1,
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({ retargetedAt: new Date().toISOString(), retargetedByJobId: job.id, target } as any)}::jsonb,
+        updated_at = now()
+      where id = ${input.retryJobId} and user_id = ${localUserId()} and profile_id = ${profileId}
+    `
+  }
+  if (!input.runNow) return { targetId, target, job }
+  const menu = await runGenerationJob(job.id)
+  return { targetId, target, job, menu }
 }
 
 export async function createWeeklyMenu(profileId: string, targetId?: string, targets?: MacroTargets, kind = 'weekly_generation'): Promise<WeeklyMenuView> {
@@ -3623,6 +3659,40 @@ function retargetCalories(target: MacroTargets, calories: number): MacroTargets 
     macroMode: 'manual',
     preset: target.preset,
     notes: unique([...target.notes, 'Objetivo calórico ajustado manualmente desde el chat.']),
+  }
+}
+
+function editedMacroTarget(base: MacroTargets, input: MacroTargetEditInput): MacroTargets {
+  const calories = Math.round(input.calories)
+  if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
+    throw new Error('El objetivo calórico debe estar entre 900 y 5000 kcal/día.')
+  }
+  const proteinG = input.proteinG === undefined ? base.proteinG : roundToNearest(input.proteinG, 5)
+  const fatG = input.fatG === undefined ? base.fatG : roundToNearest(input.fatG, 5)
+  if (!Number.isFinite(proteinG) || proteinG < 0 || !Number.isFinite(fatG) || fatG < 0) {
+    throw new Error('Proteína y grasa deben ser valores válidos.')
+  }
+  const requiredCalories = proteinG * 4 + fatG * 9
+  if (requiredCalories > calories) {
+    throw new Error(`Objetivo imposible: ${proteinG} g proteína y ${fatG} g grasa requieren ${Math.round(requiredCalories)} kcal antes de carbohidratos.`)
+  }
+  const carbsG = input.carbsG === undefined
+    ? roundToNearest((calories - requiredCalories) / 4, 5)
+    : roundToNearest(input.carbsG, 5)
+  if (!Number.isFinite(carbsG) || carbsG < 0) throw new Error('Carbohidratos debe ser un valor válido.')
+  const macroCalories = proteinG * 4 + carbsG * 4 + fatG * 9
+  if (macroCalories > calories * 1.08) {
+    throw new Error(`Objetivo imposible: esos macros suman ${Math.round(macroCalories)} kcal, por encima de ${calories} kcal.`)
+  }
+  return {
+    ...base,
+    calories,
+    proteinG,
+    carbsG,
+    fatG,
+    macroMode: 'manual',
+    preset: 'maintenance',
+    notes: unique([...base.notes, 'Objetivo editado desde una remediación de generación fallida.']),
   }
 }
 

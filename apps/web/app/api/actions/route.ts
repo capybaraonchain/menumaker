@@ -33,6 +33,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   createUserNutritionFood: 'createUserNutritionFood',
   setFallbackPolicy: 'setFallbackPolicy',
   startWeeklyMenuGeneration: 'startWeeklyMenuGeneration',
+  updateMacroTargetAndGenerate: 'updateMacroTargetAndGenerate',
   starRecipe: 'starRecipe',
   suggestReplacements: 'suggestMealReplacement',
   unstarRecipe: 'unstarRecipe',

@@ -235,8 +235,8 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Guided preference-relaxation remediation can remove selected dislikes/prohibited foods through a typed action.
 - [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes.
 - [x] Guided fallback-policy remediation can enable recipe/skeleton fallback and retry failed generation after confirmation.
+- [x] Guided target-editing remediation can save revised macro targets and generate a new week through typed actions.
 - [x] Repair-specific regeneration actions are available from persisted repair notices.
-- [x] Guided target-editing remediation form remains deferred.
 
 ## 13. In-App Chat
 
