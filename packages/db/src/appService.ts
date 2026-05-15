@@ -14,7 +14,7 @@ import {
   type RecipeCandidate,
   type Sex,
 } from '@menumaker/core'
-import { scoreRecipe, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
+import { normalizeIngredientName, scoreRecipe, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
 import {
   buildCalorieAdjustmentPlan,
   currentMenuHash,
@@ -147,6 +147,32 @@ export interface AppliedCalorieAdjustmentResult {
   menu: WeeklyMenuView
   plan: CalorieAdjustmentPlan
   changeSummary: string
+}
+
+type ReplacementOptionKind = ReplacementProposal['options'][number]['kind']
+
+interface ReplacementRequestFeatures {
+  avoidedFoods: string[]
+  wantsMoreProtein: boolean
+  wantsLowerCalories: boolean
+  wantsLowerFat: boolean
+}
+
+interface ReplacementRankedCandidate {
+  recipe: RecipeCandidate
+  nutrition: NutritionTotals
+  macroImpact: NutritionTotals
+  closestScore: number
+  creativeScore: number
+  macroScore: number
+  overallScore: number
+}
+
+const replacementSlotShares: Record<MealSlot, number> = {
+  breakfast: 0.23,
+  lunch: 0.32,
+  dinner: 0.32,
+  snack: 0.13,
 }
 
 export interface ProfileUpdateInput {
@@ -562,29 +588,34 @@ export async function regenerateMeal(menuMealId: string): Promise<WeeklyMenuView
 
 export async function suggestMealReplacements(menuMealId: string, request: string): Promise<ReplacementProposal> {
   const menu = await menuForMeal(menuMealId)
-  const meal = menu.days.flatMap((day) => day.meals).find((item) => item.id === menuMealId)
-  if (!meal) throw new Error('Comida no encontrada.')
+  const day = menu.days.find((item) => item.meals.some((meal) => meal.id === menuMealId))
+  const meal = day?.meals.find((item) => item.id === menuMealId)
+  if (!day || !meal) throw new Error('Comida no encontrada.')
   const profile = (await listProfiles()).find((item) => item.id === menu.profileId)
   if (!profile) throw new Error('Perfil no encontrado.')
-  const inferredIngredient = inferIngredientFromRequest(request)
-  const avoidedFoods = profileAvoidedFoods(profile)
-  const banned = inferredIngredient ? unique([...avoidedFoods, inferredIngredient]) : avoidedFoods
-  const candidates = templatesForSlot(meal.slot, banned, profile.locale).slice(0, 3)
-  const scored = candidates.map((candidate) => scoreRecipe(candidate, banned))
-  const kinds: ReplacementProposal['options'][number]['kind'][] = ['closest_nutrition', 'creative_delicious', 'macro_optimized']
+
+  const requestFeatures = parseReplacementRequest(request, menu, meal)
+  const avoidedFoods = unique([...profileAvoidedFoods(profile), ...requestFeatures.avoidedFoods])
+  const ranked = rankReplacementCandidates({
+    menu,
+    day,
+    meal,
+    profile,
+    avoidedFoods,
+    requestFeatures,
+  })
+  if (ranked.length === 0) throw new Error('No encontré opciones que respeten ese cambio y mantengan el menú coherente.')
+  const inferredIngredient = requestFeatures.avoidedFoods[0] ?? null
   const affectedMeals = inferredIngredient
     ? menu.days.flatMap((day) => day.meals).filter((item) => recipeIncludes(item.recipe, inferredIngredient)).map((item) => item.id)
     : [menuMealId]
+  const options = selectReplacementOptions(ranked)
+
   return {
     proposalId: crypto.randomUUID(),
     inferredIngredient,
     affectedMeals,
-    options: scored.map((recipe, index) => ({
-      kind: kinds[index] ?? 'creative_delicious',
-      recipe,
-      nutrition: recipe.nutrition,
-      macroImpact: diffNutrition(recipe.nutrition, meal.nutrition),
-    })),
+    options,
   }
 }
 
@@ -594,7 +625,11 @@ export async function replaceMeal(menuMealId: string, recipe: RecipeCandidate): 
   const meal = day?.meals.find((item) => item.id === menuMealId)
   if (!day || !meal) throw new Error('Comida no encontrada.')
   if (day.locked || meal.locked) throw new Error('Este plato está bloqueado. Desbloquéalo antes de cambiarlo.')
-  const scored = scoreRecipe(recipe)
+  const profile = (await listProfiles()).find((item) => item.id === menu.profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  if (recipeIncludesAny(recipe, profile.bannedFoods)) throw new Error('La receta propuesta contiene un alimento prohibido para este perfil.')
+  const scored = scoreRecipe(recipe, profile.bannedFoods)
+  if (scored.nutrition.confidence === 'unknown') throw new Error('La receta propuesta tiene ingredientes sin nutrición determinista suficiente.')
   const recipeId = await persistRecipe(scored, 'replacement')
   const sql = sqlClient()
   await sql`
@@ -980,15 +1015,216 @@ async function menuForMeal(menuMealId: string): Promise<WeeklyMenuView> {
   return getWeeklyMenu(row.weekly_menu_id)
 }
 
-function inferIngredientFromRequest(request: string): string | null {
-  const normalized = request.toLowerCase()
-  const candidates = ['brócoli', 'brocoli', 'pollo', 'arroz', 'huevo', 'atún', 'atun', 'salmón', 'salmon', 'yogur']
-  return candidates.find((candidate) => normalized.includes(candidate)) ?? null
+function parseReplacementRequest(request: string, menu: WeeklyMenuView, meal: MenuMealView): ReplacementRequestFeatures {
+  const normalized = normalizeIngredientName(request)
+  return {
+    avoidedFoods: inferAvoidedFoods(request, menu, meal),
+    wantsMoreProtein: /\b(mas proteina|alta proteina|sube proteina|proteico|proteinico)\b/.test(normalized),
+    wantsLowerCalories: /\b(menos calorias|baja calorias|mas ligero|ligero|menos kcal)\b/.test(normalized),
+    wantsLowerFat: /\b(menos grasa|baja grasa|sin grasa|poca grasa)\b/.test(normalized),
+  }
 }
 
-function recipeIncludes(recipe: RecipeView, ingredient: string): boolean {
-  const normalized = ingredient.toLowerCase()
-  return recipe.ingredients.some((item) => item.name.toLowerCase().includes(normalized))
+function inferAvoidedFoods(request: string, menu: WeeklyMenuView, meal: MenuMealView): string[] {
+  const normalized = normalizeIngredientName(request)
+  const hasNegativeIntent = /\b(no me gusta|no quiero|quita|quitar|sin|evita|evitar|cambia|saca|odio|prohibe|no uses)\b/.test(normalized)
+  if (!hasNegativeIntent) return []
+
+  const ingredientNames = unique([
+    ...meal.recipe.ingredients.map((item) => item.name),
+    ...menu.days.flatMap((day) => day.meals.flatMap((item) => item.recipe.ingredients.map((ingredient) => ingredient.name))),
+  ])
+  const matched = ingredientNames.filter((ingredient) => {
+    const item = normalizeIngredientName(ingredient)
+    return normalized.includes(item) || item.split(' ').some((token) => token.length > 3 && normalized.includes(token))
+  })
+  if (matched.length > 0) return matched
+
+  const freeformMatch = normalized.match(/\b(?:no me gusta|no quiero|quita|quitar|sin|evita|evitar|cambia|saca|odio|prohibe|no uses)\s+(.+?)(?:\s+en\b|\s+del\b|\s+de la\b|\s+por\b|$)/)
+  const value = freeformMatch?.[1]
+    ?.replace(/\b(el|la|los|las|un|una|este|esta|plato|receta|comida)\b/g, '')
+    .trim()
+  return value ? [value] : []
+}
+
+function rankReplacementCandidates(input: {
+  menu: WeeklyMenuView
+  day: DayPlanView
+  meal: MenuMealView
+  profile: ProfileRow
+  avoidedFoods: string[]
+  requestFeatures: ReplacementRequestFeatures
+}): ReplacementRankedCandidate[] {
+  const titleCounts = new Map<string, number>()
+  for (const day of input.menu.days) {
+    for (const meal of day.meals) {
+      if (meal.id === input.meal.id) continue
+      const title = normalizeIngredientName(meal.recipe.title)
+      titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1)
+    }
+  }
+  const sameDayTitles = new Set(input.day.meals
+    .filter((meal) => meal.id !== input.meal.id)
+    .map((meal) => normalizeIngredientName(meal.recipe.title)))
+  const selected = new Map<string, ReplacementRankedCandidate>()
+  const rawCandidates = templatesForSlot(input.meal.slot, input.avoidedFoods, input.profile.locale)
+
+  for (const candidate of rawCandidates) {
+    const title = normalizeIngredientName(candidate.title)
+    if (title === normalizeIngredientName(input.meal.recipe.title)) continue
+    if (selected.has(title)) continue
+    if (recipeIncludesAny(candidate, input.avoidedFoods)) continue
+
+    const raw = scoreRecipe(candidate, input.avoidedFoods)
+    if (raw.nutrition.confidence === 'unknown') continue
+    const currentTargetCalories = input.meal.nutrition.calories
+    const slotTargetCalories = input.menu.target.calories * replacementSlotShares[input.meal.slot]
+    const targetCalories = currentTargetCalories * 0.72 + slotTargetCalories * 0.28
+    const factor = clamp(targetCalories / Math.max(raw.nutrition.calories, 1), 0.72, 1.28)
+    const recipe = scaleRecipe(candidate, factor)
+    const scored = scoreRecipe(recipe, input.avoidedFoods)
+    if (scored.nutrition.confidence === 'unknown') continue
+    if (recipeIncludesAny(scored, input.avoidedFoods)) continue
+
+    const weeklyAfter = diffNutrition(sumNutrition([
+      input.menu.nutrition,
+      scored.nutrition,
+      negateNutrition(input.meal.nutrition),
+    ]), weeklyTarget(input.menu.target))
+    const dayNutrition = sumNutrition(input.day.meals.map((meal) => meal.nutrition))
+    const dayAfter = diffNutrition(sumNutrition([dayNutrition, scored.nutrition, negateNutrition(input.meal.nutrition)]), dailyTarget(input.menu.target))
+    const macroDistanceToCurrent = nutritionDistance(scored.nutrition, input.meal.nutrition)
+    const macroDistanceToTargets = Math.abs(weeklyAfter.calories) / Math.max(input.menu.target.calories * 7, 1) * 110 +
+      Math.max(0, -weeklyAfter.proteinG) / Math.max(input.menu.target.proteinG * 7, 1) * 95 +
+      Math.abs(dayAfter.calories) / Math.max(input.menu.target.calories, 1) * 55 +
+      Math.max(0, -dayAfter.proteinG) / Math.max(input.menu.target.proteinG, 1) * 45
+    const sameDayPenalty = sameDayTitles.has(title) ? 80 : 0
+    const weeklyRepeatPenalty = (titleCounts.get(title) ?? 0) * 12
+    const requestScore = replacementRequestScore(scored.nutrition, input.meal.nutrition, input.requestFeatures)
+    const satiety = replacementSatietyScore(scored)
+    const closestScore = 120 - macroDistanceToCurrent - sameDayPenalty - weeklyRepeatPenalty + requestScore * 0.35
+    const creativeScore = 100 + satiety + requestScore - sameDayPenalty - weeklyRepeatPenalty * 1.8 - macroDistanceToCurrent * 0.22
+    const macroScore = 120 - macroDistanceToTargets - sameDayPenalty - weeklyRepeatPenalty * 0.7 + requestScore * 0.5
+    selected.set(title, {
+      recipe: scored,
+      nutrition: scored.nutrition,
+      macroImpact: diffNutrition(scored.nutrition, input.meal.nutrition),
+      closestScore: round(closestScore),
+      creativeScore: round(creativeScore),
+      macroScore: round(macroScore),
+      overallScore: round(closestScore * 0.28 + creativeScore * 0.26 + macroScore * 0.46),
+    })
+  }
+
+  return [...selected.values()].sort((left, right) => right.overallScore - left.overallScore)
+}
+
+function selectReplacementOptions(candidates: ReplacementRankedCandidate[]): ReplacementProposal['options'] {
+  const selected = new Set<string>()
+  const result: ReplacementProposal['options'] = []
+  const pick = (kind: ReplacementOptionKind, scoreKey: keyof Pick<ReplacementRankedCandidate, 'closestScore' | 'creativeScore' | 'macroScore'>) => {
+    const option = [...candidates]
+      .filter((candidate) => !selected.has(normalizeIngredientName(candidate.recipe.title)))
+      .sort((left, right) => right[scoreKey] - left[scoreKey])[0]
+    if (!option) return
+    selected.add(normalizeIngredientName(option.recipe.title))
+    result.push({
+      kind,
+      recipe: option.recipe,
+      nutrition: option.nutrition,
+      macroImpact: option.macroImpact,
+    })
+  }
+
+  pick('closest_nutrition', 'closestScore')
+  pick('creative_delicious', 'creativeScore')
+  pick('macro_optimized', 'macroScore')
+  for (const candidate of candidates) {
+    if (result.length >= 3) break
+    const title = normalizeIngredientName(candidate.recipe.title)
+    if (selected.has(title)) continue
+    selected.add(title)
+    result.push({
+      kind: ['closest_nutrition', 'creative_delicious', 'macro_optimized'][result.length] as ReplacementOptionKind,
+      recipe: candidate.recipe,
+      nutrition: candidate.nutrition,
+      macroImpact: candidate.macroImpact,
+    })
+  }
+  return result
+}
+
+function recipeIncludes(recipe: { ingredients: Array<{ name: string }> }, ingredient: string): boolean {
+  const normalized = normalizeIngredientName(ingredient)
+  return recipe.ingredients.some((item) => {
+    const candidate = normalizeIngredientName(item.name)
+    return candidate.includes(normalized) || normalized.includes(candidate)
+  })
+}
+
+function recipeIncludesAny(recipe: { ingredients: Array<{ name: string }> }, avoidedFoods: string[]): boolean {
+  return avoidedFoods.some((food) => recipeIncludes(recipe, food))
+}
+
+function replacementRequestScore(next: NutritionTotals, previous: NutritionTotals, request: ReplacementRequestFeatures): number {
+  let score = 0
+  if (request.wantsMoreProtein) score += (next.proteinG - previous.proteinG) * 1.8
+  if (request.wantsLowerCalories) score += (previous.calories - next.calories) * 0.16
+  if (request.wantsLowerFat) score += (previous.fatG - next.fatG) * 2.4
+  return score
+}
+
+function replacementSatietyScore(recipe: RecipeCandidate & { nutrition: NutritionTotals }): number {
+  const grams = recipe.ingredients.reduce((total, ingredient) => total + normalizedApproxGrams(ingredient.amount, ingredient.unit), 0)
+  const fiber = recipe.nutrition.fiberG ?? 0
+  const density = recipe.nutrition.calories / Math.max(grams, 1)
+  return Math.min(35, grams / 12) + Math.min(30, recipe.nutrition.proteinG * 0.8) + Math.min(18, fiber * 3) + (density <= 1.5 ? 14 : density <= 2.2 ? 8 : 2)
+}
+
+function nutritionDistance(next: NutritionTotals, previous: NutritionTotals): number {
+  return Math.abs(next.calories - previous.calories) / Math.max(previous.calories, 1) * 80 +
+    Math.abs(next.proteinG - previous.proteinG) / Math.max(previous.proteinG, 1) * 45 +
+    Math.abs(next.fatG - previous.fatG) / Math.max(previous.fatG, 1) * 20 +
+    Math.abs(next.carbsG - previous.carbsG) / Math.max(previous.carbsG, 1) * 20
+}
+
+function weeklyTarget(target: MacroTargets): NutritionTotals {
+  return {
+    calories: target.calories * 7,
+    proteinG: target.proteinG * 7,
+    carbsG: target.carbsG * 7,
+    fatG: target.fatG * 7,
+    confidence: target.confidence,
+  }
+}
+
+function dailyTarget(target: MacroTargets): NutritionTotals {
+  return {
+    calories: target.calories,
+    proteinG: target.proteinG,
+    carbsG: target.carbsG,
+    fatG: target.fatG,
+    confidence: target.confidence,
+  }
+}
+
+function negateNutrition(nutrition: NutritionTotals): NutritionTotals {
+  return {
+    calories: -nutrition.calories,
+    proteinG: -nutrition.proteinG,
+    carbsG: -nutrition.carbsG,
+    fatG: -nutrition.fatG,
+    fiberG: -(nutrition.fiberG ?? 0),
+    confidence: nutrition.confidence,
+  }
+}
+
+function normalizedApproxGrams(amount: number, unit: string): number {
+  const normalized = normalizeIngredientName(unit)
+  if (normalized === 'kg') return amount * 1000
+  if (normalized === 'cucharada' || normalized === 'cucharadas' || normalized === 'tbsp') return amount * 13.5
+  if (normalized === 'cucharadita' || normalized === 'cucharaditas' || normalized === 'tsp') return amount * 4.5
+  return amount
 }
 
 function diffNutrition(next: NutritionTotals, previous: NutritionTotals): NutritionTotals {
@@ -1051,6 +1287,10 @@ function appliedSummaryFromPlan(plan: CalorieAdjustmentPlan): string {
 
 function round(value: number): number {
   return Math.round(value * 10) / 10
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
 }
 
 function unique(values: string[]): string[] {
