@@ -1,4 +1,5 @@
 import {
+  adjustCaloriesAndRegenerateWeek,
   applySimilarIngredientReplacements,
   getAppState,
   lockDay,
@@ -21,6 +22,9 @@ export async function POST(request: Request) {
     let result: unknown
     if (body.action === 'lockMeal') result = await lockMeal(body.menuMealId, body.locked)
     else if (body.action === 'lockDay') result = await lockDay(body.dayPlanId, body.locked)
+    else if (body.action === 'adjustCaloriesAndRegenerateWeek') {
+      result = await adjustCaloriesAndRegenerateWeek(body.profileId, Number(body.calories))
+    }
     else if (body.action === 'regenerateWeek') result = await regenerateWeek(body.menuId)
     else if (body.action === 'regenerateDay') result = await regenerateDay(body.dayPlanId)
     else if (body.action === 'regenerateMeal') result = await regenerateMeal(body.menuMealId)

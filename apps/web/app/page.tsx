@@ -19,7 +19,7 @@ import {
   Utensils,
   X,
 } from 'lucide-react'
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, Fragment, useEffect, useState } from 'react'
 
 type Tab = 'semana' | 'recetas' | 'historial' | 'perfil'
 type Nutrition = { calories: number; proteinG: number; carbsG: number; fatG: number; fiberG?: number; confidence: string }
@@ -88,6 +88,17 @@ type ReplacementProposal = {
   options: Array<{ kind: string; recipe: any; nutrition: Nutrition; macroImpact: Nutrition }>
 }
 type SimilarPrompt = { ingredient: string; mealIds: string[] }
+type ChatAction = {
+  id: string
+  type: 'adjustCaloriesAndRegenerateWeek'
+  label: string
+  payload: {
+    profileId: string
+    menuId: string
+    calories: number
+  }
+}
+type ChatMessage = { role: 'user' | 'assistant'; text: string; actions?: ChatAction[] }
 
 const dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
 const slotLabels: Record<string, string> = { breakfast: 'Desayuno', lunch: 'Comida', dinner: 'Cena', snack: 'Snack' }
@@ -112,7 +123,9 @@ export default function App() {
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
   const [chatInput, setChatInput] = useState('¿Cómo ves los macros de esta semana?')
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [pendingChatAction, setPendingChatAction] = useState<ChatAction | null>(null)
+  const [chatBusy, setChatBusy] = useState<string | null>(null)
   const activeProfileId = state?.activeProfile?.id
 
   useEffect(() => {
@@ -134,6 +147,30 @@ export default function App() {
     if (!res.ok) throw new Error(data.error ?? 'Error')
     if (data.state) setState(data.state)
     return data.result
+  }
+
+  async function runChatAction(action: ChatAction) {
+    setChatBusy(action.id)
+    const res = await fetch('/api/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: action.type, ...action.payload }),
+    })
+    const data = await res.json()
+    setChatBusy(null)
+    if (!res.ok) {
+      setChatMessages((items) => [...items, { role: 'assistant', text: data.error ?? 'No pude completar la acción.' }])
+      return
+    }
+    if (data.state) setState(data.state)
+    setPendingChatAction(null)
+    setChatMessages((items) => [
+      ...items,
+      {
+        role: 'assistant',
+        text: `Listo. Rehice el menú con **${action.payload.calories} kcal/día** usando el proceso de generación semanal y respetando los elementos bloqueados.`,
+      },
+    ])
   }
 
   if (loading) return <LoadingScreen />
@@ -270,7 +307,20 @@ export default function App() {
           <div className="chat-box">
             <div className="chat-messages">
               {chatMessages.length === 0 && <p className="muted">Pregunta por macros, cambios o la variedad de la semana. El chat propone; no cambia nada sin confirmación.</p>}
-              {chatMessages.map((message, index) => <p key={index} className={message.role}>{message.text}</p>)}
+              {chatMessages.map((message, index) => (
+                <article key={index} className={`chat-message ${message.role}`}>
+                  <MarkdownText text={message.text} />
+                  {message.actions && message.actions.length > 0 && (
+                    <div className="chat-actions">
+                      {message.actions.map((action) => (
+                        <button key={action.id} className="primary" disabled={chatBusy === action.id} onClick={() => runChatAction(action)}>
+                          <Check size={16} /> {chatBusy === action.id ? 'Reajustando...' : action.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
             </div>
             <form onSubmit={async (event) => {
               event.preventDefault()
@@ -278,9 +328,20 @@ export default function App() {
               if (!message) return
               setChatMessages((items) => [...items, { role: 'user', text: message }])
               setChatInput('')
+              if (pendingChatAction && isAffirmative(message)) {
+                await runChatAction(pendingChatAction)
+                return
+              }
+              if (pendingChatAction && isNegative(message)) {
+                setPendingChatAction(null)
+                setChatMessages((items) => [...items, { role: 'assistant', text: 'Perfecto, no cambio el menú.' }])
+                return
+              }
               const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profileId: activeProfileId, message }) })
               const data = await res.json()
-              setChatMessages((items) => [...items, { role: 'assistant', text: data.text ?? data.error }])
+              const actions = Array.isArray(data.actions) ? data.actions : []
+              setPendingChatAction(actions[0] ?? null)
+              setChatMessages((items) => [...items, { role: 'assistant', text: data.text ?? data.error, actions }])
             }}>
               <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
               <button className="icon-button" aria-label="Enviar"><ChevronRight /></button>
@@ -480,7 +541,7 @@ function NavButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 }
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return <div className="modal-backdrop"><section className="modal"><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X /></button></header>{children}</section></div>
+  return <div className="modal-backdrop"><section className="modal"><header><h2>{title}</h2><button className="icon-button" aria-label="Cerrar" onClick={onClose}><X /></button></header>{children}</section></div>
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {
@@ -497,6 +558,54 @@ function EmptyState({ title, body }: { title: string; body: string }) {
 
 function LoadingScreen() {
   return <main className="loading"><Sparkles /><p>Cargando MenuMaker...</p></main>
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const blocks = text.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean)
+  return (
+    <>
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
+        if (lines.length > 0 && lines.every((line) => /^[-*]\s+/.test(line))) {
+          return <ul key={blockIndex}>{lines.map((line, index) => <li key={index}><InlineMarkdown text={line.replace(/^[-*]\s+/, '')} /></li>)}</ul>
+        }
+        if (lines.length > 0 && lines.every((line) => /^\d+\.\s+/.test(line))) {
+          return <ol key={blockIndex}>{lines.map((line, index) => <li key={index}><InlineMarkdown text={line.replace(/^\d+\.\s+/, '')} /></li>)}</ol>
+        }
+        return (
+          <p key={blockIndex}>
+            {lines.map((line, index) => (
+              <Fragment key={line}>
+                {index > 0 && <br />}
+                <InlineMarkdown text={line} />
+              </Fragment>
+            ))}
+          </p>
+        )
+      })}
+    </>
+  )
+}
+
+function InlineMarkdown({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean)
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>
+        if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>
+        return <Fragment key={index}>{part}</Fragment>
+      })}
+    </>
+  )
+}
+
+function isAffirmative(value: string): boolean {
+  return /^(si|sí|confirmo|confirmar|ok|vale|dale|continua|continuar|hazlo|adelante)\b/i.test(value.trim())
+}
+
+function isNegative(value: string): boolean {
+  return /^(no|cancelar|cancela|para|espera)\b/i.test(value.trim())
 }
 
 function splitList(value: string): string[] {

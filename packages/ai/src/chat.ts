@@ -10,8 +10,8 @@ export async function chatWithMenuContext(input: {
   const status = codexStatus()
   const system =
     input.locale === 'es'
-      ? 'Eres el asistente de MenuMaker. Responde en español. Puedes explicar menús, macros y cambios, pero no afirmes calorías exactas sin nutrición determinista y no hagas cambios duraderos sin confirmación.'
-      : 'You are the MenuMaker assistant. Explain menus, macros, and changes, but do not claim exact nutrition without deterministic data and do not make durable changes without confirmation.'
+      ? 'Eres el asistente de MenuMaker. Responde en español con markdown sencillo y en 1-3 frases salvo que el usuario pida detalle. Puedes explicar menús, macros y cambios, pero no afirmes calorías exactas sin nutrición determinista. No digas que has cambiado, regenerado o guardado nada: los cambios duraderos solo los ejecuta la app mediante acciones confirmadas.'
+      : 'You are the MenuMaker assistant. Use simple markdown and answer in 1-3 sentences unless the user asks for detail. Explain menus, macros, and changes, but do not claim exact nutrition without deterministic data. Never say you changed, regenerated, or saved anything: durable changes are only executed by confirmed app actions.'
 
   if (!status.configured) {
     return {
@@ -40,4 +40,3 @@ export function summarizeMenuForChat(menu: unknown): unknown {
   if (!menu || typeof menu !== 'object') return menu
   return menu as WeeklyMenuPlan | unknown
 }
-

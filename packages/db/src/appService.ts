@@ -2,6 +2,7 @@ import {
   calculateMacroTargets,
   impossibleTargetConflict,
   mealSlots,
+  roundToNearest,
   type ActivityLevel,
   type Goal,
   type Locale,
@@ -447,15 +448,26 @@ export async function lockDay(dayPlanId: string, locked: boolean): Promise<DayPl
 
 export async function regenerateWeek(menuId: string): Promise<WeeklyMenuView> {
   const current = await getWeeklyMenu(menuId)
-  const locked = new Map<string, MenuMealView>()
-  const lockedDays = new Set<number>()
-  for (const day of current.days) {
-    if (day.locked) lockedDays.add(day.dayIndex)
-    for (const meal of day.meals) {
-      if (day.locked || meal.locked) locked.set(`${day.dayIndex}:${meal.slot}`, meal)
-    }
-  }
+  const { locked, lockedDays } = lockedItemsFromMenu(current)
   const regenerated = await createWeeklyMenu(current.profileId, undefined, current.target, 'regenerate_week')
+  await applyLockedMeals(regenerated, locked, lockedDays)
+  return getWeeklyMenu(regenerated.id)
+}
+
+export async function adjustCaloriesAndRegenerateWeek(profileId: string, calories: number): Promise<WeeklyMenuView> {
+  const current = await getCurrentMenu(profileId)
+  if (!current) throw new Error('Menú no encontrado.')
+  if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
+    throw new Error('El objetivo calórico debe estar entre 900 y 5000 kcal/día.')
+  }
+
+  const target = retargetCalories(current.target, Math.round(calories))
+  const conflict = impossibleTargetConflict(target)
+  if (conflict.impossible) throw new Error(conflict.messageEs)
+
+  const targetId = await saveMacroTarget(profileId, target)
+  const { locked, lockedDays } = lockedItemsFromMenu(current)
+  const regenerated = await createWeeklyMenu(profileId, targetId, target, 'chat_calorie_target_adjustment')
   await applyLockedMeals(regenerated, locked, lockedDays)
   return getWeeklyMenu(regenerated.id)
 }
@@ -799,6 +811,31 @@ async function applyLockedMeals(menu: WeeklyMenuView, locked: Map<string, MenuMe
     }
   }
   await recalculateMenuNutrition(menu.id)
+}
+
+function lockedItemsFromMenu(menu: WeeklyMenuView): { locked: Map<string, MenuMealView>; lockedDays: Set<number> } {
+  const locked = new Map<string, MenuMealView>()
+  const lockedDays = new Set<number>()
+  for (const day of menu.days) {
+    if (day.locked) lockedDays.add(day.dayIndex)
+    for (const meal of day.meals) {
+      if (day.locked || meal.locked) locked.set(`${day.dayIndex}:${meal.slot}`, meal)
+    }
+  }
+  return { locked, lockedDays }
+}
+
+function retargetCalories(target: MacroTargets, calories: number): MacroTargets {
+  const requiredCalories = target.proteinG * 4 + target.fatG * 9
+  const carbsG = requiredCalories >= calories ? 0 : roundToNearest((calories - requiredCalories) / 4, 5)
+  return {
+    ...target,
+    calories,
+    carbsG,
+    macroMode: 'manual',
+    preset: target.preset,
+    notes: unique([...target.notes, 'Objetivo calórico ajustado manualmente desde el chat.']),
+  }
 }
 
 async function replaceMealWithGenerated(menuMealId: string, profile: ProfileRow, target: MacroTargets, dayIndex: number): Promise<void> {
