@@ -245,6 +245,7 @@ export const actionEvents = pgTable('action_events', {
 
 export const aiCache = pgTable('ai_cache', {
   id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id),
   inputHash: text('input_hash').notNull(),
   model: text('model').notNull(),
   schemaVersion: text('schema_version').notNull(),

@@ -1,4 +1,5 @@
 import { closeDb, sqlClient } from './client'
+import { localUserId } from './env'
 
 const migration = `
 create extension if not exists pgcrypto;
@@ -255,12 +256,13 @@ create table if not exists action_events (
 
 create table if not exists ai_cache (
   id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
   input_hash text not null,
   model text not null,
   schema_version text not null,
   output jsonb not null,
   created_at timestamptz not null default now(),
-  unique(input_hash, model, schema_version)
+  unique(user_id, input_hash, model, schema_version)
 );
 
 create table if not exists app_settings (
@@ -283,6 +285,17 @@ create index if not exists idx_action_events_user on action_events(user_id, crea
 async function main(): Promise<void> {
   const sql = sqlClient()
   await sql.unsafe(migration)
+  const userId = localUserId()
+  await sql`
+    insert into users (id, email)
+    values (${userId}, 'local@menumaker.test')
+    on conflict (id) do nothing
+  `
+  await sql`alter table ai_cache add column if not exists user_id uuid references users(id) on delete cascade`
+  await sql`update ai_cache set user_id = ${userId} where user_id is null`
+  await sql`alter table ai_cache alter column user_id set not null`
+  await sql`alter table ai_cache drop constraint if exists ai_cache_input_hash_model_schema_version_key`
+  await sql`create unique index if not exists ai_cache_user_hash_model_schema_idx on ai_cache(user_id, input_hash, model, schema_version)`
   await closeDb()
   console.log('Database migrated')
 }

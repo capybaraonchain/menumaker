@@ -965,7 +965,7 @@ export async function exportLocalData(): Promise<LocalResetExport> {
     pendingActions: await countRows(sql`select count(*)::int as count from pending_actions where user_id = ${localUserId()}`),
     actionEvents: await countRows(sql`select count(*)::int as count from action_events where user_id = ${localUserId()}`),
     userIngredientAliases: await countRows(sql`select count(*)::int as count from food_aliases where user_id = ${localUserId()} and source = 'user'`),
-    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache`),
+    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache where user_id = ${localUserId()}`),
   }
   return {
     exportedAt: new Date().toISOString(),
@@ -992,7 +992,7 @@ export async function resetLocalData(expectedPhrase: string, exportBeforeDelete 
     pendingActions: await countRows(sql`select count(*)::int as count from pending_actions where user_id = ${localUserId()}`),
     actionEvents: await countRows(sql`select count(*)::int as count from action_events where user_id = ${localUserId()}`),
     userIngredientAliases: await countRows(sql`select count(*)::int as count from food_aliases where user_id = ${localUserId()} and source = 'user'`),
-    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache`),
+    aiCacheEntries: await countRows(sql`select count(*)::int as count from ai_cache where user_id = ${localUserId()}`),
   }
 
   await sql.begin(async (tx) => {
@@ -1008,7 +1008,7 @@ export async function resetLocalData(expectedPhrase: string, exportBeforeDelete 
     await tx`delete from profiles where user_id = ${localUserId()}`
     await tx`delete from food_aliases where user_id = ${localUserId()} and source = 'user'`
     await tx`delete from app_settings where user_id = ${localUserId()}`
-    await tx`delete from ai_cache`
+    await tx`delete from ai_cache where user_id = ${localUserId()}`
   })
 
   return {
@@ -2586,7 +2586,8 @@ async function readAiCache<T>(schemaVersion: string, input: unknown): Promise<T 
   const sql = sqlClient()
   const [cached] = await sql<[{ output: T }]>`
     select output from ai_cache
-    where input_hash = ${inputHash}
+    where user_id = ${localUserId()}
+      and input_hash = ${inputHash}
       and model = ${status.model}
       and schema_version = ${schemaVersion}
     order by created_at desc
@@ -2600,8 +2601,11 @@ async function writeAiCache(schemaVersion: string, input: unknown, output: unkno
   const inputHash = aiCacheInputHash(schemaVersion, input, status.model, status.reasoningEffort)
   const sql = sqlClient()
   await sql`
-    insert into ai_cache (input_hash, model, schema_version, output)
-    values (${inputHash}, ${status.model}, ${schemaVersion}, ${sql.json(output as any)})
+    insert into ai_cache (user_id, input_hash, model, schema_version, output)
+    values (${localUserId()}, ${inputHash}, ${status.model}, ${schemaVersion}, ${sql.json(output as any)})
+    on conflict (user_id, input_hash, model, schema_version) do update set
+      output = excluded.output,
+      created_at = now()
   `
 }
 

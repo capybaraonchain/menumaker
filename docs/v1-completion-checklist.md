@@ -16,6 +16,8 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] No cloud deployment is required.
 - [x] No hosted auth/account system is required.
 - [x] A single local user stub is used while preserving `user_id` ownership fields.
+- [x] Generated outputs and AI cache rows are user-scoped for hosted sync/RLS compatibility.
+- [x] Schema ownership regression tests guard user-owned tables before hosted sync exists.
 
 ## 2. Monorepo And Tooling
 

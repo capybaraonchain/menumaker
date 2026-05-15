@@ -98,6 +98,8 @@ Every user-owned row must be scoped by `user_id` directly or through a parent ro
 
 The schema must remain compatible with later hosted Supabase Auth and Row Level Security. When hosted sync is enabled, RLS policies must prevent users from reading or mutating another user's profiles, menus, recipes, preferences, or generated outputs.
 
+Local v1 includes a schema ownership regression test so user-owned tables, including generated-output tables such as `ai_cache`, keep direct `user_id` coverage while hosted auth is still stubbed.
+
 This keeps local development fast while avoiding schema changes when hosted sync is added later.
 
 ## Data Model

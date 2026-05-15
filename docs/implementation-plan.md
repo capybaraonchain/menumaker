@@ -96,6 +96,8 @@ Acceptance:
 - Migrations create all v1 tables locally.
 - Repository code can create and read a local user, profile, recipe, and weekly menu.
 - User-owned rows include ownership fields compatible with hosted sync later.
+- Generated-output tables, including AI cache, are scoped by `user_id`.
+- Schema ownership tests prevent adding user-owned tables without direct local ownership coverage.
 
 ## Phase 2: Core Domain And Macro Policy
 
