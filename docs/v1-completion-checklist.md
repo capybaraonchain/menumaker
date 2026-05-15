@@ -91,6 +91,9 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] External/source nutrition records can be imported into `source_foods`, `nutrition_records`, and `food_mappings`.
 - [x] Open Food Facts barcode products can be fetched and imported into the source nutrition tables.
 - [x] Open Food Facts import is exposed through the shared app action registry and MCP.
+- [x] USDA FoodData Central downloadable JSON datasets can be imported without an API key through CLI, app action registry, and MCP.
+- [x] User-defined per-100g foods can be created through the shared app action registry and MCP.
+- [x] Ingredient alias mapping can target imported/custom foods, not only seed foods.
 - [x] Generation, meal-edit, and calorie-adjustment scoring read the database nutrition catalog before falling back to seed foods.
 - [x] Ingredient aliases work in Spanish and English.
 - [x] User-confirmed ingredient aliases can be saved and reused by the scorer.

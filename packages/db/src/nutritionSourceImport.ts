@@ -42,6 +42,21 @@ interface OpenFoodFactsProductResponse {
   product?: Record<string, any>
 }
 
+interface UsdaFoodDataCentralDownloadFood {
+  fdcId?: number | string
+  description?: string
+  dataType?: string
+  publicationDate?: string
+  foodCategory?: string | { description?: string }
+  foodNutrients?: Array<Record<string, any>>
+  foodPortions?: Array<Record<string, any>>
+}
+
+export interface UsdaFoodDataCentralDownloadOptions {
+  limit?: number
+  includeFdcIds?: number[]
+}
+
 export function parseNutritionSourceRecords(input: unknown): NutritionSourceRecord[] {
   return normalizeNutritionSourceRecords(sourceFileSchema.parse(input))
 }
@@ -114,6 +129,77 @@ export async function importNutritionSourceRecords(records: NutritionSourceRecor
 export async function importNutritionSourceFile(path: string): Promise<{ imported: number; sources: string[] }> {
   const raw = await readFile(path, 'utf8')
   return importNutritionSourceRecords(parseNutritionSourceRecords(JSON.parse(raw)))
+}
+
+export function parseUsdaFoodDataCentralDownload(
+  input: unknown,
+  options: UsdaFoodDataCentralDownloadOptions = {},
+): NutritionSourceRecord[] {
+  const foods = usdaDownloadFoods(input)
+  const include = options.includeFdcIds?.length ? new Set(options.includeFdcIds) : null
+  const records: NutritionSourceRecord[] = []
+
+  for (const food of foods) {
+    const fdcId = usdaFdcId(food)
+    if (include && (!fdcId || !include.has(fdcId))) continue
+    try {
+      records.push(usdaFoodDataCentralDownloadFoodToRecord(food))
+    } catch (error) {
+      if (include) throw error
+    }
+    if (options.limit && records.length >= options.limit) break
+  }
+
+  return normalizeNutritionSourceRecords(records)
+}
+
+export function usdaFoodDataCentralDownloadFoodToRecord(food: UsdaFoodDataCentralDownloadFood): NutritionSourceRecord {
+  const fdcId = usdaFdcId(food)
+  if (!fdcId) throw new Error('USDA FoodData Central record without fdcId.')
+  const canonicalName = firstText([food.description, `USDA FDC ${fdcId}`])
+  const calories = usdaNutrientValue(food, ['1008', '208'])
+  const proteinG = usdaNutrientValue(food, ['1003', '203', 'Protein'])
+  const carbsG = usdaNutrientValue(food, ['1005', '205', 'Carbohydrate, by difference'])
+  const fatG = usdaNutrientValue(food, ['1004', '204', 'Total lipid (fat)'])
+  if (calories === null || proteinG === null || carbsG === null || fatG === null) {
+    throw new Error(`USDA FoodData Central ${fdcId} no incluye macros por 100g suficientes.`)
+  }
+
+  const fiberG = usdaNutrientValue(food, ['1079', '291', 'Fiber, total dietary'])
+  return {
+    foodId: `usda fdc ${fdcId}`,
+    canonicalName,
+    category: usdaFoodCategory(food),
+    aliases: [canonicalName],
+    source: 'usda_fdc',
+    sourceId: `usda_fdc:${fdcId}`,
+    confidence: 'database',
+    per100g: {
+      calories,
+      proteinG,
+      carbsG,
+      fatG,
+      fiberG: fiberG ?? undefined,
+    },
+    householdUnits: usdaHouseholdUnits(food),
+    payload: {
+      fdcId,
+      dataType: food.dataType,
+      publicationDate: food.publicationDate,
+      sourceDataset: 'FoodData Central downloadable JSON',
+      importedAt: new Date().toISOString(),
+    },
+  }
+}
+
+export async function importUsdaFoodDataCentralDownloadFile(
+  path: string,
+  options: UsdaFoodDataCentralDownloadOptions = {},
+): Promise<{ imported: number; sources: string[]; records: NutritionSourceRecord[] }> {
+  const raw = await readFile(path, 'utf8')
+  const records = parseUsdaFoodDataCentralDownload(JSON.parse(raw), options)
+  const result = await importNutritionSourceRecords(records)
+  return { ...result, records }
 }
 
 export function openFoodFactsProductToRecord(input: OpenFoodFactsProductResponse): NutritionSourceRecord {
@@ -248,6 +334,82 @@ function openFoodFactsCategory(product: Record<string, any>): string {
   const lastTag = tags.at(-1)
   if (typeof lastTag === 'string' && lastTag.trim()) return lastTag.replace(/^[a-z]{2}:/, '').replace(/-/g, ' ')
   return firstText([product.categories, 'packaged'])
+}
+
+function usdaDownloadFoods(input: unknown): UsdaFoodDataCentralDownloadFood[] {
+  if (Array.isArray(input)) return input.filter(isUsdaFoodObject)
+  if (!input || typeof input !== 'object') throw new Error('USDA FoodData Central download must be a JSON object or array.')
+  const root = input as Record<string, unknown>
+  const keys = ['FoundationFoods', 'SRLegacyFoods', 'SurveyFoods', 'BrandedFoods', 'foods', 'Foods']
+  for (const key of keys) {
+    const value = root[key]
+    if (Array.isArray(value)) return value.filter(isUsdaFoodObject)
+  }
+  throw new Error('USDA FoodData Central JSON does not contain a supported food array.')
+}
+
+function usdaFdcId(food: UsdaFoodDataCentralDownloadFood): number | null {
+  if (!food || typeof food !== 'object') return null
+  const number = typeof food.fdcId === 'number' ? food.fdcId : typeof food.fdcId === 'string' ? Number(food.fdcId) : NaN
+  return Number.isFinite(number) && number > 0 ? Math.trunc(number) : null
+}
+
+function isUsdaFoodObject(value: unknown): value is UsdaFoodDataCentralDownloadFood {
+  return Boolean(value && typeof value === 'object')
+}
+
+function usdaFoodCategory(food: UsdaFoodDataCentralDownloadFood): string {
+  if (typeof food.foodCategory === 'string' && food.foodCategory.trim()) return food.foodCategory.trim()
+  if (food.foodCategory && typeof food.foodCategory === 'object' && food.foodCategory.description?.trim()) {
+    return food.foodCategory.description.trim()
+  }
+  return firstText([food.dataType, 'usda food'])
+}
+
+function usdaNutrientValue(food: UsdaFoodDataCentralDownloadFood, accepted: string[]): number | null {
+  const normalizedAccepted = accepted.map((value) => value.toLowerCase())
+  for (const item of food.foodNutrients ?? []) {
+    const nutrient = item.nutrient && typeof item.nutrient === 'object' ? item.nutrient as Record<string, unknown> : {}
+    const candidates = [
+      item.nutrientId,
+      item.nutrientNumber,
+      item.nutrientName,
+      item.name,
+      nutrient.id,
+      nutrient.number,
+      nutrient.name,
+    ].map((value) => String(value ?? '').trim().toLowerCase()).filter(Boolean)
+
+    if (candidates.some((candidate) => normalizedAccepted.includes(candidate))) {
+      return numberFrom(item.amount ?? item.value)
+    }
+  }
+  return null
+}
+
+function usdaHouseholdUnits(food: UsdaFoodDataCentralDownloadFood): NutritionSourceRecord['householdUnits'] {
+  const units = (food.foodPortions ?? []).flatMap((portion) => {
+    const grams = numberFrom(portion.gramWeight)
+    if (!grams) return []
+    const measureUnit = portion.measureUnit && typeof portion.measureUnit === 'object'
+      ? portion.measureUnit as Record<string, unknown>
+      : {}
+    const names = [
+      measureUnit.name,
+      measureUnit.abbreviation,
+      portion.modifier,
+      portion.portionDescription,
+    ].flatMap(splitAliasValue)
+    const uniqueNames = [...new Set(names.map((item) => item.trim()).filter(Boolean))]
+    if (!uniqueNames.length) return []
+    return [{
+      units: uniqueNames,
+      grams,
+      confidence: 'database' as const,
+      note: `Porción USDA FoodData Central para FDC ${food.fdcId}.`,
+    }]
+  })
+  return units.length ? units : undefined
 }
 
 function servingQuantity(product: Record<string, any>): number | null {

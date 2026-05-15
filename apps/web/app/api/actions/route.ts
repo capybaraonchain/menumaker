@@ -29,6 +29,8 @@ const legacyActionNames: Record<string, AppActionName> = {
   savePreference: 'savePreference',
   saveIngredientMapping: 'saveIngredientMapping',
   importOpenFoodFactsProduct: 'importOpenFoodFactsProduct',
+  importUsdaFoodDataCentralDownload: 'importUsdaFoodDataCentralDownload',
+  createUserNutritionFood: 'createUserNutritionFood',
   setFallbackPolicy: 'setFallbackPolicy',
   startWeeklyMenuGeneration: 'startWeeklyMenuGeneration',
   starRecipe: 'starRecipe',

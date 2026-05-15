@@ -64,6 +64,8 @@ const pendingActionNames = [
   'runGenerationJob',
   'setFallbackPolicy',
   'importOpenFoodFactsProduct',
+  'importUsdaFoodDataCentralDownload',
+  'createUserNutritionFood',
 ] as const
 
 function json(value: unknown) {
@@ -357,6 +359,56 @@ server.registerTool(
   async ({ profileId, barcode, confirmed }) => {
     requireConfirmation(confirmed, 'import Open Food Facts product')
     return json(await executeAppAction('importOpenFoodFactsProduct', { profileId, barcode }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'create_user_nutrition_food',
+  {
+    description: 'Mutation: create a user-defined deterministic food with per-100g nutrition, aliases, and optional household unit conversions. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid().optional(),
+      canonicalName: z.string().min(2),
+      category: z.string().min(1).default('user food'),
+      aliases: z.array(z.string().min(1)).default([]),
+      per100g: z.object({
+        calories: z.number().nonnegative(),
+        proteinG: z.number().nonnegative(),
+        carbsG: z.number().nonnegative(),
+        fatG: z.number().nonnegative(),
+        fiberG: z.number().nonnegative().optional(),
+      }),
+      householdUnits: z.array(z.object({
+        units: z.array(z.string().min(1)).min(1),
+        grams: z.number().positive(),
+        note: z.string().optional(),
+      })).default([]),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, canonicalName, category, aliases, per100g, householdUnits, confirmed }) => {
+    requireConfirmation(confirmed, 'create user nutrition food')
+    return json(await executeAppAction('createUserNutritionFood', { profileId, canonicalName, category, aliases, per100g, householdUnits }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'import_usda_fdc_download',
+  {
+    description: 'Mutation: import a local USDA FoodData Central downloadable JSON dataset into MenuMaker source nutrition tables. No API key is used. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid().optional(),
+      path: z.string().min(1),
+      limit: z.number().int().positive().optional(),
+      fdcIds: z.array(z.number().int().positive()).default([]),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, path, limit, fdcIds, confirmed }) => {
+    requireConfirmation(confirmed, 'import USDA FoodData Central download')
+    return json(await executeAppAction('importUsdaFoodDataCentralDownload', { profileId, path, limit, fdcIds }, 'mcp'))
   },
 )
 

@@ -4,6 +4,7 @@ import {
   applyRegenerationPlan,
   applySimilarIngredientReplacements,
   cancelGenerationJob,
+  createUserNutritionFood,
   deleteProfile,
   enqueuePreviewGenerationJob,
   enqueueWeeklyMenuGenerationJob,
@@ -28,11 +29,12 @@ import {
   previewCalorieAdjustmentPlan,
   type RegenerationPlan,
   type PreviewGenerationJobInput,
+  type UserNutritionFoodInput,
 } from './appService'
 import type { CalorieAdjustmentPlan } from './caloriePlanner'
 import { sqlClient } from './client'
 import { localUserId } from './env'
-import { importOpenFoodFactsBarcodes } from './nutritionSourceImport'
+import { importOpenFoodFactsBarcodes, importUsdaFoodDataCentralDownloadFile } from './nutritionSourceImport'
 
 const uuid = z.string().uuid()
 
@@ -170,6 +172,30 @@ export const appActionSchemas = {
   importOpenFoodFactsProduct: z.object({
     profileId: uuid.optional(),
     barcode: z.string().regex(/^\d{6,14}$/, 'Código de barras inválido.'),
+  }),
+  importUsdaFoodDataCentralDownload: z.object({
+    profileId: uuid.optional(),
+    path: z.string().min(1),
+    limit: z.number().int().positive().optional(),
+    fdcIds: z.array(z.number().int().positive()).default([]),
+  }),
+  createUserNutritionFood: z.object({
+    profileId: uuid.optional(),
+    canonicalName: z.string().min(2),
+    category: z.string().min(1).default('user food'),
+    aliases: z.array(z.string().min(1)).default([]),
+    per100g: z.object({
+      calories: z.number().nonnegative(),
+      proteinG: z.number().nonnegative(),
+      carbsG: z.number().nonnegative(),
+      fatG: z.number().nonnegative(),
+      fiberG: z.number().nonnegative().optional(),
+    }),
+    householdUnits: z.array(z.object({
+      units: z.array(z.string().min(1)).min(1),
+      grams: z.number().positive(),
+      note: z.string().optional(),
+    })).default([]),
   }),
   setFallbackPolicy: z.object({
     profileId: uuid.optional(),
@@ -586,6 +612,45 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
         ...result,
         state: await appStateResult(input.profileId),
       }
+    },
+  },
+  importUsdaFoodDataCentralDownload: {
+    name: 'importUsdaFoodDataCentralDownload',
+    inputSchema: appActionSchemas.importUsdaFoodDataCentralDownload,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.import_usda_fdc_download',
+    confirmationCopyEs: (input) => [
+      `Se importará el dataset descargado de USDA FoodData Central desde **${input.path}** como fuente nutricional determinística.`,
+      input.fdcIds.length ? `Solo se importarán los FDC IDs: ${input.fdcIds.join(', ')}.` : '',
+      input.limit ? `Límite de registros: ${input.limit}.` : '',
+      '¿Continuar?',
+    ].filter(Boolean).join('\n\n'),
+    successCopyEs: (_, result) => {
+      const imported = result && typeof result === 'object' && typeof (result as { imported?: unknown }).imported === 'number'
+        ? (result as { imported: number }).imported
+        : 0
+      return `Listo. Importé **${imported}** alimento(s) desde USDA FoodData Central.`
+    },
+    async execute(input) {
+      const result = await importUsdaFoodDataCentralDownloadFile(input.path, {
+        limit: input.limit,
+        includeFdcIds: input.fdcIds.length ? input.fdcIds : undefined,
+      })
+      return {
+        ...result,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  createUserNutritionFood: {
+    name: 'createUserNutritionFood',
+    inputSchema: appActionSchemas.createUserNutritionFood,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.create_user_nutrition_food',
+    confirmationCopyEs: (input) => `Se creará **${input.canonicalName}** como alimento determinístico local con nutrición por 100g definida por el usuario. ¿Continuar?`,
+    successCopyEs: (input) => `Listo. Creé **${input.canonicalName}** como alimento determinístico local y ya puede usarse para mapear ingredientes.`,
+    async execute(input) {
+      return createUserNutritionFood(input as UserNutritionFoodInput)
     },
   },
   setFallbackPolicy: {

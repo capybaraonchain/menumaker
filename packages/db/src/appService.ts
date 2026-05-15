@@ -41,6 +41,7 @@ import {
 } from './caloriePlanner'
 import { closeDb, sqlClient } from './client'
 import { loadDotEnv, localUserId } from './env'
+import { importNutritionSourceRecords, type NutritionSourceRecord } from './nutritionSourceImport'
 import {
   buildGenerationRemediationPlan,
   buildRepairRemediationPlans,
@@ -208,6 +209,7 @@ export interface MappableFoodView {
   name: string
   category: string
   aliases: string[]
+  sources?: string[]
 }
 
 export interface IngredientMappingView {
@@ -217,6 +219,25 @@ export interface IngredientMappingView {
   foodId: string
   canonicalFoodName: string
   source: 'user'
+}
+
+export interface UserNutritionFoodInput {
+  profileId?: string
+  canonicalName: string
+  category: string
+  aliases?: string[]
+  per100g: {
+    calories: number
+    proteinG: number
+    carbsG: number
+    fatG: number
+    fiberG?: number
+  }
+  householdUnits?: Array<{
+    units: string[]
+    grams: number
+    note?: string
+  }>
 }
 
 export interface ChatCommandPlanningInput {
@@ -683,11 +704,36 @@ export async function relaxProfilePreferences(
 }
 
 export async function listMappableFoods(): Promise<MappableFoodView[]> {
-  return seedFoods.map((food) => ({
-    id: food.id,
-    name: food.aliases[0] ?? food.canonicalName,
-    category: food.category,
-    aliases: food.aliases,
+  const sql = sqlClient()
+  const rows = await sql<Array<{ id: string; name: string; category: string; aliases: string[] | null; sources: string[] | null }>>`
+    select
+      fi.id,
+      fi.canonical_name as name,
+      fi.category,
+      coalesce(array_agg(distinct fa.alias) filter (where fa.alias is not null), '{}') as aliases,
+      coalesce(array_agg(distinct sf.source) filter (where sf.source is not null), '{}') as sources
+    from food_items fi
+    left join food_aliases fa on fa.food_id = fi.id and (fa.user_id is null or fa.user_id = ${localUserId()})
+    left join nutrition_records nr on nr.food_id = fi.id
+    left join source_foods sf on sf.id = nr.source_id
+    group by fi.id, fi.canonical_name, fi.category
+    order by fi.canonical_name
+  `
+  if (rows.length === 0) {
+    return seedFoods.map((food) => ({
+      id: food.id,
+      name: food.aliases[0] ?? food.canonicalName,
+      category: food.category,
+      aliases: food.aliases,
+      sources: ['seed'],
+    })).sort((left, right) => left.name.localeCompare(right.name, 'es'))
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    aliases: unique([row.name, ...(row.aliases ?? [])]),
+    sources: [...new Set(row.sources ?? [])].sort(),
   })).sort((left, right) => left.name.localeCompare(right.name, 'es'))
 }
 
@@ -700,7 +746,7 @@ export async function saveIngredientMapping(
   if (!profile) throw new Error('Perfil no encontrado.')
   const normalizedIngredient = normalizeIngredientName(ingredientName)
   if (normalizedIngredient.length < 2) throw new Error('Escribe el ingrediente que quieres mapear.')
-  const food = resolveSeedFood(canonicalFoodName)
+  const food = await resolveMappableFood(canonicalFoodName)
   if (!food) throw new Error('Selecciona un alimento determinístico válido.')
   const sql = sqlClient()
   await sql`
@@ -713,8 +759,55 @@ export async function saveIngredientMapping(
     ingredientName: ingredientName.trim(),
     normalizedIngredientName: normalizedIngredient,
     foodId: food.id,
-    canonicalFoodName: food.aliases[0] ?? food.canonicalName,
+    canonicalFoodName: food.name,
     source: 'user',
+  }
+}
+
+export async function createUserNutritionFood(input: UserNutritionFoodInput): Promise<{ record: NutritionSourceRecord; food: MappableFoodView; state: AppState }> {
+  if (input.profileId) {
+    const profile = (await listProfiles()).find((item) => item.id === input.profileId)
+    if (!profile) throw new Error('Perfil no encontrado.')
+  }
+  const canonicalName = input.canonicalName.trim()
+  if (canonicalName.length < 2) throw new Error('Escribe un nombre de alimento válido.')
+  if (!Number.isFinite(input.per100g.calories) || input.per100g.calories < 0) throw new Error('Las calorías por 100g deben ser válidas.')
+  const slug = normalizeIngredientName(canonicalName).replace(/\s+/g, '_')
+  const sourceId = `user:${localUserId()}:${slug}`
+  const record: NutritionSourceRecord = {
+    foodId: `user ${slug}`,
+    canonicalName,
+    category: input.category.trim() || 'user food',
+    aliases: unique([canonicalName, ...(input.aliases ?? [])]),
+    source: 'user',
+    sourceId,
+    confidence: 'database',
+    per100g: {
+      calories: round(input.per100g.calories),
+      proteinG: round(input.per100g.proteinG),
+      carbsG: round(input.per100g.carbsG),
+      fatG: round(input.per100g.fatG),
+      fiberG: input.per100g.fiberG === undefined ? undefined : round(input.per100g.fiberG),
+    },
+    householdUnits: input.householdUnits?.map((unit) => ({
+      units: unit.units,
+      grams: unit.grams,
+      confidence: 'database',
+      note: unit.note?.trim() || `Conversión definida por el usuario para ${canonicalName}.`,
+    })),
+    payload: {
+      createdBy: 'local_user',
+      profileId: input.profileId,
+      createdAt: new Date().toISOString(),
+    },
+  }
+  await importNutritionSourceRecords([record])
+  const food = (await listMappableFoods()).find((item) => item.id === normalizeIngredientName(record.foodId).replace(/\s+/g, '_'))
+    ?? { id: record.foodId, name: record.canonicalName, category: record.category, aliases: record.aliases, sources: ['user'] }
+  return {
+    record,
+    food,
+    state: await getAppState(input.profileId),
   }
 }
 
@@ -2720,6 +2813,16 @@ function resolveSeedFood(value: string) {
   return seedFoods.find((food) => {
     if (normalizeIngredientName(food.id) === normalized) return true
     if (normalizeIngredientName(food.canonicalName) === normalized) return true
+    return food.aliases.some((alias) => normalizeIngredientName(alias) === normalized)
+  }) ?? null
+}
+
+async function resolveMappableFood(value: string): Promise<MappableFoodView | null> {
+  const normalized = normalizeIngredientName(value)
+  const foods = await listMappableFoods()
+  return foods.find((food) => {
+    if (normalizeIngredientName(food.id) === normalized) return true
+    if (normalizeIngredientName(food.name) === normalized) return true
     return food.aliases.some((alias) => normalizeIngredientName(alias) === normalized)
   }) ?? null
 }

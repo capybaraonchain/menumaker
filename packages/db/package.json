@@ -13,7 +13,8 @@
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
     "nutrition:import": "tsx src/nutritionSourceImport.ts",
-    "nutrition:import:off": "tsx src/openFoodFactsImport.ts"
+    "nutrition:import:off": "tsx src/openFoodFactsImport.ts",
+    "nutrition:import:usda-download": "tsx src/usdaFdcDownloadImport.ts"
   },
   "dependencies": {
     "@menumaker/ai": "0.1.0",

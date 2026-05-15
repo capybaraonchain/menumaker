@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizeNutritionSourceRecords, openFoodFactsProductToRecord, parseNutritionSourceRecords } from './nutritionSourceImport'
+import {
+  normalizeNutritionSourceRecords,
+  openFoodFactsProductToRecord,
+  parseNutritionSourceRecords,
+  parseUsdaFoodDataCentralDownload,
+  usdaFoodDataCentralDownloadFoodToRecord,
+} from './nutritionSourceImport'
 
 test('parses external nutrition records into source-scoped import rows', () => {
   const records = parseNutritionSourceRecords({
@@ -103,4 +109,58 @@ test('rejects Open Food Facts products without complete per-100g macros', () => 
       nutriments: { 'energy-kcal_100g': 100, proteins_100g: 2 },
     },
   }), /macros por 100g/)
+})
+
+test('normalizes USDA FoodData Central downloadable foods into source records', () => {
+  const record = usdaFoodDataCentralDownloadFoodToRecord({
+    fdcId: 321358,
+    description: 'Hummus, commercial',
+    dataType: 'Foundation',
+    publicationDate: '2026-04-30',
+    foodCategory: { description: 'Legumes and Legume Products' },
+    foodNutrients: [
+      { nutrient: { id: 1008, number: '208', name: 'Energy' }, amount: 237 },
+      { nutrient: { id: 1003, number: '203', name: 'Protein' }, amount: 7.35 },
+      { nutrient: { id: 1005, number: '205', name: 'Carbohydrate, by difference' }, amount: 14.9 },
+      { nutrient: { id: 1004, number: '204', name: 'Total lipid (fat)' }, amount: 17.8 },
+      { nutrient: { id: 1079, number: '291', name: 'Fiber, total dietary' }, amount: 5.4 },
+    ],
+    foodPortions: [
+      { measureUnit: { name: 'tablespoon', abbreviation: 'tbsp' }, gramWeight: 33.9, amount: 2 },
+    ],
+  })
+
+  assert.equal(record.foodId, 'usda fdc 321358')
+  assert.equal(record.source, 'usda_fdc')
+  assert.equal(record.sourceId, 'usda_fdc:321358')
+  assert.equal(record.confidence, 'database')
+  assert.equal(record.category, 'Legumes and Legume Products')
+  assert.deepEqual(record.per100g, { calories: 237, proteinG: 7.4, carbsG: 14.9, fatG: 17.8, fiberG: 5.4 })
+  assert.equal(record.householdUnits?.[0]?.grams, 33.9)
+  assert.ok(record.householdUnits?.[0]?.units.includes('tablespoon'))
+})
+
+test('parses USDA FoodData Central download roots and skips incomplete non-selected records', () => {
+  const records = parseUsdaFoodDataCentralDownload({
+    FoundationFoods: [
+      {
+        fdcId: 1,
+        description: 'Incomplete',
+        foodNutrients: [{ nutrient: { id: 1008 }, amount: 100 }],
+      },
+      {
+        fdcId: 2,
+        description: 'Complete food',
+        foodNutrients: [
+          { nutrient: { number: '208' }, amount: 100 },
+          { nutrient: { number: '203' }, amount: 10 },
+          { nutrient: { number: '205' }, amount: 20 },
+          { nutrient: { number: '204' }, amount: 3 },
+        ],
+      },
+    ],
+  })
+
+  assert.equal(records.length, 1)
+  assert.equal(records[0]?.sourceId, 'usda_fdc:2')
 })

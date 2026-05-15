@@ -69,3 +69,36 @@ test('Open Food Facts import is exposed through shared actions and MCP', () => {
   assert.match(mcp, /executeAppAction\('importOpenFoodFactsProduct'/)
   assert.match(apiRoute, /importOpenFoodFactsProduct: 'importOpenFoodFactsProduct'/)
 })
+
+test('USDA downloadable dataset import is keyless and exposed through shared actions and MCP', () => {
+  const nutritionImport = readFileSync(resolve(root, 'packages/db/src/nutritionSourceImport.ts'), 'utf8')
+  const packageJson = readFileSync(resolve(root, 'packages/db/package.json'), 'utf8')
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+  const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+
+  assert.match(nutritionImport, /parseUsdaFoodDataCentralDownload/)
+  assert.match(nutritionImport, /usdaFoodDataCentralDownloadFoodToRecord/)
+  assert.match(packageJson, /nutrition:import:usda-download/)
+  assert.match(appActions, /importUsdaFoodDataCentralDownload: z\.object/)
+  assert.match(appActions, /importUsdaFoodDataCentralDownloadFile\(input\.path/)
+  assert.match(appActions, /auditLabel: 'mutation\.import_usda_fdc_download'/)
+  assert.match(mcp, /'import_usda_fdc_download'/)
+  assert.match(mcp, /executeAppAction\('importUsdaFoodDataCentralDownload'/)
+  assert.match(apiRoute, /importUsdaFoodDataCentralDownload: 'importUsdaFoodDataCentralDownload'/)
+})
+
+test('user nutrition foods are source-backed and exposed through actions and MCP', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+  const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+
+  assert.match(appService, /export async function createUserNutritionFood/)
+  assert.match(appService, /importNutritionSourceRecords\(\[record\]\)/)
+  assert.match(appService, /async function resolveMappableFood/)
+  assert.match(appActions, /createUserNutritionFood: z\.object/)
+  assert.match(appActions, /auditLabel: 'mutation\.create_user_nutrition_food'/)
+  assert.match(mcp, /'create_user_nutrition_food'/)
+  assert.match(apiRoute, /createUserNutritionFood: 'createUserNutritionFood'/)
+})

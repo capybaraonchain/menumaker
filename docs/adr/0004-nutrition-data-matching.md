@@ -176,15 +176,27 @@ The Open Food Facts adapter uses the public product-by-barcode API, imports per-
 
 The same import is exposed through the shared app action registry and MCP as `import_open_food_facts_product`, behind explicit confirmation. Agents should use that tool instead of shelling out to the CLI when operating MenuMaker.
 
+USDA FoodData Central can be imported without an API key from the official downloadable JSON datasets:
+
+```bash
+npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json
+```
+
+The USDA download adapter maps FDC IDs to `source = usda_fdc`, extracts per-100g calories/protein/carbs/fat/fiber from FoodData Central nutrient IDs/numbers, imports household portions when gram weights are present, and stores dataset metadata in `source_foods.payload`. Local v1 does not use the FoodData Central API-key endpoint; if a USDA JSON record lacks complete macro fields, it is skipped during bulk import or rejected when explicitly selected.
+
+The same import is exposed through the shared app action registry and MCP as `import_usda_fdc_download`, behind explicit confirmation. Agents should use it only for local downloaded JSON files.
+
+When no packaged-product barcode or imported source record exists, local v1 can create a user-defined deterministic food through `create_user_nutrition_food`. This stores user-provided per-100g nutrition in the same source tables with `source = user`, making it available to the deterministic scorer and later alias mapping. Agents must treat these values as user-entered facts, not authoritative public-source data.
+
 ## V1 Source Plan
 
 For v1:
 
 - Use Open Food Facts for barcode and packaged-product matches. Local v1 includes the barcode import command; app UI search/scanning can be added later.
-- Use USDA FoodData Central for robust generic food coverage.
+- Use USDA FoodData Central downloadable datasets for robust generic food coverage without requiring an API key in local v1.
 - Include a BEDCA adapter boundary.
 - Implement BEDCA if access or import is straightforward. The generic normalized import path exists first; official dataset-specific adapters should emit that format.
-- Use a user confirmation loop for ambiguous ingredients. In local v1 this first lands as alias mapping to an existing deterministic food; later versions can add source-record picking and custom nutrition records.
+- Use a user confirmation loop for ambiguous ingredients. In local v1 this supports alias mapping to existing deterministic foods, Open Food Facts barcode import, and user-defined per-100g foods; later versions can add a richer in-app source picker.
 - Allow AI fallback only when visibly marked as estimated.
 
 ## Consequences
