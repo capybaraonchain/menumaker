@@ -1,47 +1,108 @@
 import { chatWithMenuContext } from '@menumaker/ai'
-import { getAppState } from '@menumaker/db'
+import { executeAppAction, getAppState } from '@menumaker/db'
 import { NextResponse } from 'next/server'
+
+type ChatResponse =
+  | { type: 'message'; markdown: string; text: string; actions: [] }
+  | {
+      type: 'confirmation_required'
+      markdown: string
+      text: string
+      action: {
+        id: string
+        name: string
+        type: string
+        label: string
+        payload: Record<string, unknown>
+      }
+      actions: Array<{
+        id: string
+        type: string
+        label: string
+        payload: Record<string, unknown>
+      }>
+    }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json()
     const state = await getAppState(body.profileId)
+    const regenerationIntent = extractRegenerationIntent(String(body.message ?? ''))
+    if (regenerationIntent === 'week' && state.activeProfile && state.currentMenu) {
+      const markdown =
+        'Regenerar la semana creará un nuevo menú semanal y conservará los días o comidas bloqueadas. ' +
+        'Las comidas no bloqueadas serán reemplazadas. ¿Continuar?'
+      const action = {
+        id: crypto.randomUUID(),
+        name: 'regenerateWeek',
+        type: 'regenerateWeek',
+        label: 'Regenerar semana',
+        payload: {
+          profileId: state.activeProfile.id,
+          menuId: state.currentMenu.id,
+        },
+      }
+      const response: ChatResponse = {
+        type: 'confirmation_required',
+        markdown,
+        text: markdown,
+        action,
+        actions: [action],
+      }
+      return NextResponse.json(response)
+    }
+
     const requestedCalories = extractRequestedCalories(String(body.message ?? ''))
     if (requestedCalories && state.activeProfile && state.currentMenu) {
-      const currentCalories = state.currentMenu.target.calories
-      if (requestedCalories === currentCalories) {
-        return NextResponse.json({
-          text: `Tu objetivo calórico diario ya está en **${currentCalories} kcal/día**.`,
+      const proposal = await executeAppAction('proposeCalorieTargetChange', {
+        profileId: state.activeProfile.id,
+        calories: requestedCalories,
+      }) as { markdown: string; currentCalories?: number; requestedCalories: number }
+      if (proposal.currentCalories === requestedCalories) {
+        const response: ChatResponse = {
+          type: 'message',
+          markdown: proposal.markdown,
+          text: proposal.markdown,
           actions: [],
-        })
+        }
+        return NextResponse.json(response)
       }
 
-      const direction = requestedCalories < currentCalories ? 'bajar' : 'subir'
-      return NextResponse.json({
-        text:
-          `El objetivo calórico diario está en **${currentCalories} kcal/día**. ` +
-          `Si deseas ${direction} el objetivo calórico a **${requestedCalories} kcal/día**, deberás reajustar el menú semanal. ` +
-          'Cualquier comida que no esté bloqueada será regenerada; las recetas guardadas seguirán guardadas en Recetas. ¿Continuar?',
+      const action = {
+        id: crypto.randomUUID(),
+        name: 'applyCalorieTargetChange' as const,
+        type: 'adjustCaloriesAndRegenerateWeek' as const,
+        label: `Reajustar a ${requestedCalories} kcal/día`,
+        payload: {
+          profileId: state.activeProfile.id,
+          calories: requestedCalories,
+        },
+      }
+      const response: ChatResponse = {
+        type: 'confirmation_required',
+        markdown: proposal.markdown,
+        text: proposal.markdown,
+        action,
         actions: [
           {
-            id: crypto.randomUUID(),
-            type: 'adjustCaloriesAndRegenerateWeek',
-            label: `Reajustar a ${requestedCalories} kcal/día`,
-            payload: {
-              profileId: state.activeProfile.id,
-              menuId: state.currentMenu.id,
-              calories: requestedCalories,
-            },
+            id: action.id,
+            type: action.type,
+            label: action.label,
+            payload: action.payload,
           },
         ],
-      })
+      }
+      return NextResponse.json(response)
     }
 
     if (requestedCalories && !state.currentMenu) {
-      return NextResponse.json({
+      const response: ChatResponse = {
+        type: 'message',
+        markdown: 'Necesitas tener un menú semanal activo antes de reajustar el objetivo calórico.',
         text: 'Necesitas tener un menú semanal activo antes de reajustar el objetivo calórico.',
         actions: [],
-      })
+      }
+      return NextResponse.json(response)
     }
 
     const response = await chatWithMenuContext({
@@ -50,10 +111,22 @@ export async function POST(request: Request) {
       profileName: state.activeProfile?.name,
       menuContext: state.currentMenu,
     })
-    return NextResponse.json(response)
+    const chatResponse: ChatResponse = {
+      type: 'message',
+      markdown: response.text,
+      text: response.text,
+      actions: [],
+    }
+    return NextResponse.json({ ...response, ...chatResponse })
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Error de chat.' }, { status: 400 })
   }
+}
+
+function extractRegenerationIntent(message: string): 'week' | null {
+  const normalized = message.toLowerCase()
+  if (/(regenera|rehaz|recrear|nuevo).*(semana|men[uú])/.test(normalized)) return 'week'
+  return null
 }
 
 function extractRequestedCalories(message: string): number | null {

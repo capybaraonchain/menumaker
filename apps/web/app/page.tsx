@@ -90,13 +90,9 @@ type ReplacementProposal = {
 type SimilarPrompt = { ingredient: string; mealIds: string[] }
 type ChatAction = {
   id: string
-  type: 'adjustCaloriesAndRegenerateWeek'
+  type: string
   label: string
-  payload: {
-    profileId: string
-    menuId: string
-    calories: number
-  }
+  payload: Record<string, unknown>
 }
 type ChatMessage = { role: 'user' | 'assistant'; text: string; actions?: ChatAction[] }
 
@@ -168,7 +164,7 @@ export default function App() {
       ...items,
       {
         role: 'assistant',
-        text: `Listo. Rehice el menú con **${action.payload.calories} kcal/día** usando el proceso de generación semanal y respetando los elementos bloqueados.`,
+        text: chatActionSuccessText(action),
       },
     ])
   }
@@ -313,9 +309,17 @@ export default function App() {
                   {message.actions && message.actions.length > 0 && (
                     <div className="chat-actions">
                       {message.actions.map((action) => (
-                        <button key={action.id} className="primary" disabled={chatBusy === action.id} onClick={() => runChatAction(action)}>
-                          <Check size={16} /> {chatBusy === action.id ? 'Reajustando...' : action.label}
-                        </button>
+                        <div key={action.id} className="chat-action-row">
+                          <button className="primary" disabled={chatBusy === action.id} onClick={() => runChatAction(action)}>
+                            <Check size={16} /> {chatBusy === action.id ? 'Ejecutando...' : action.label}
+                          </button>
+                          <button className="secondary" type="button" onClick={() => {
+                            setPendingChatAction(null)
+                            setChatMessages((items) => [...items, { role: 'assistant', text: 'Cancelado. No cambio el menú.' }])
+                          }}>
+                            <X size={16} /> Cancelar
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -606,6 +610,16 @@ function isAffirmative(value: string): boolean {
 
 function isNegative(value: string): boolean {
   return /^(no|cancelar|cancela|para|espera)\b/i.test(value.trim())
+}
+
+function chatActionSuccessText(action: ChatAction): string {
+  if (action.type === 'adjustCaloriesAndRegenerateWeek') {
+    return `Listo. Ajusté el objetivo a **${action.payload.calories} kcal/día** y regeneré la semana usando el proceso real de creación de menús, respetando los elementos bloqueados.`
+  }
+  if (action.type === 'regenerateWeek') return 'Listo. Regeneré la semana respetando los días y comidas bloqueadas.'
+  if (action.type === 'regenerateDay') return 'Listo. Regeneré el día respetando las comidas bloqueadas.'
+  if (action.type === 'regenerateMeal') return 'Listo. Regeneré la comida seleccionada.'
+  return 'Listo. Acción aplicada.'
 }
 
 function splitList(value: string): string[] {

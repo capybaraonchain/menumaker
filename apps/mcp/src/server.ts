@@ -6,8 +6,10 @@ import {
   impossibleTargetConflict,
 } from '@menumaker/core'
 import {
+  appActionMetadata,
   createProfileAndFirstMenu,
   createWeeklyMenu,
+  executeAppAction,
   getAppState,
   getCurrentMenu,
   getMenuHistory,
@@ -116,6 +118,16 @@ function mealIncludesIngredient(meal: MenuMealView, ingredient: string) {
 }
 
 server.registerTool(
+  'get_action_registry',
+  {
+    description: 'Read-only: list shared MenuMaker app actions, confirmation requirements, and audit labels.',
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async () => json(appActionMetadata()),
+)
+
+server.registerTool(
   'list_profiles',
   {
     description: 'Read-only: list local MenuMaker profiles.',
@@ -214,6 +226,29 @@ server.registerTool(
     const profile = (await listProfiles()).find((item) => item.id === profileId)
     if (!profile) throw new Error('Perfil no encontrado.')
     return json(summarizeMacroTarget(profile))
+  },
+)
+
+server.registerTool(
+  'propose_calorie_target_change',
+  {
+    description: 'Proposal: prepare a calorie target change confirmation using the shared app action registry. Does not mutate state.',
+    inputSchema: { profileId: z.string().uuid(), calories: z.number().int().min(900).max(5000) },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ profileId, calories }) => json(await executeAppAction('proposeCalorieTargetChange', { profileId, calories })),
+)
+
+server.registerTool(
+  'apply_calorie_target_change',
+  {
+    description: 'Mutation: save a new calorie target and regenerate the week through the shared app action registry. Requires confirmed=true.',
+    inputSchema: { profileId: z.string().uuid(), calories: z.number().int().min(900).max(5000), confirmed: z.boolean() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, calories, confirmed }) => {
+    requireConfirmation(confirmed, 'calorie target change')
+    return json(await executeAppAction('applyCalorieTargetChange', { profileId, calories }))
   },
 )
 
@@ -537,12 +572,12 @@ server.registerTool(
   'regenerate_meal',
   {
     description: 'Mutation: regenerate one unlocked meal.',
-    inputSchema: { menuMealId: z.string().uuid(), confirmed: z.boolean() },
+    inputSchema: { menuMealId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ menuMealId, confirmed }) => {
+  async ({ menuMealId, profileId, confirmed }) => {
     requireConfirmation(confirmed, 'meal regeneration')
-    return json(await regenerateMeal(menuMealId))
+    return json(await executeAppAction('regenerateMeal', { menuMealId, profileId }))
   },
 )
 
@@ -550,12 +585,12 @@ server.registerTool(
   'regenerate_day',
   {
     description: 'Mutation: regenerate one unlocked day while preserving locked meals.',
-    inputSchema: { dayPlanId: z.string().uuid(), confirmed: z.boolean() },
+    inputSchema: { dayPlanId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ dayPlanId, confirmed }) => {
+  async ({ dayPlanId, profileId, confirmed }) => {
     requireConfirmation(confirmed, 'day regeneration')
-    return json(await regenerateDay(dayPlanId))
+    return json(await executeAppAction('regenerateDay', { dayPlanId, profileId }))
   },
 )
 
@@ -563,12 +598,12 @@ server.registerTool(
   'regenerate_week',
   {
     description: 'Mutation: regenerate the week while preserving locked days and meals.',
-    inputSchema: { menuId: z.string().uuid(), confirmed: z.boolean() },
+    inputSchema: { menuId: z.string().uuid(), profileId: z.string().uuid().optional(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ menuId, confirmed }) => {
+  async ({ menuId, profileId, confirmed }) => {
     requireConfirmation(confirmed, 'week regeneration')
-    return json(await regenerateWeek(menuId))
+    return json(await executeAppAction('regenerateWeek', { menuId, profileId }))
   },
 )
 

@@ -507,6 +507,11 @@ textarea {
   margin-top: 10px;
 }
 
+.chat-action-row {
+  display: grid;
+  gap: 8px;
+}
+
 .chat-box form {
   display: grid;
   grid-template-columns: 1fr auto;
