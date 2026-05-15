@@ -87,11 +87,13 @@ For generation failures or progress:
 
 1. Call `get_generation_jobs` for the active profile.
 2. Explain the persisted status, last log step, failure code, retry count, and error in Spanish for Spanish profiles.
-3. Do not invent hidden progress if the job row has not changed.
-4. Use `enqueue_weekly_menu_generation` when the user wants to queue a weekly generation job without waiting for completion.
-5. Use `run_generation_job` when the user confirms execution of a queued generation job.
-6. Use `start_weekly_menu_generation` only when the user wants enqueue-and-run in one step.
-7. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
+3. Prefer the persisted `generationSummary` when present; it is either a cached LLM summary or an explicit deterministic fallback.
+4. When discussing repairs, use the recorded `RepairRequest` / `RepairResult` telemetry instead of guessing why a meal changed.
+5. Do not invent hidden progress if the job row has not changed.
+6. Use `enqueue_weekly_menu_generation` when the user wants to queue a weekly generation job without waiting for completion.
+7. Use `run_generation_job` when the user confirms execution of a queued generation job.
+8. Use `start_weekly_menu_generation` only when the user wants enqueue-and-run in one step.
+9. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
 
 For profile deletion:
 

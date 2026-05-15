@@ -72,16 +72,33 @@ export const mealReplacementProposalSchema = z.object({
 })
 
 export const repairRequestSchema = z.object({
-  reason: z.enum(['impossible_targets', 'low_nutrition_confidence', 'ambiguous_ingredient', 'banned_item_conflict', 'repetition_conflict', 'generation_exhausted']),
+  reason: z.enum([
+    'impossible_targets',
+    'low_nutrition_confidence',
+    'ambiguous_ingredient',
+    'banned_item_conflict',
+    'repetition_conflict',
+    'daily_calorie_drift',
+    'weekly_protein_low',
+    'generation_exhausted',
+  ]),
   message: z.string(),
   attempt: z.number().int().min(1),
   maxAttempts: z.number().int().min(1),
+  dayIndex: z.number().int().min(0).max(6).optional(),
+  slot: mealSlotSchema.optional(),
+  title: z.string().optional(),
 })
 
 export const repairResultSchema = z.object({
   repaired: z.boolean(),
   retry: z.boolean(),
   notes: z.array(z.string()),
+  attempt: z.number().int().min(1).optional(),
+  reason: repairRequestSchema.shape.reason.optional(),
+  dayIndex: z.number().int().min(0).max(6).optional(),
+  slot: mealSlotSchema.optional(),
+  actionCount: z.number().int().min(0).optional(),
 })
 
 export const generationSummarySchema = z.object({

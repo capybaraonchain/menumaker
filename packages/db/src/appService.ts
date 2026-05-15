@@ -5,6 +5,9 @@ import {
   generateWeekSkeleton,
   chatWithMenuContext,
   planChatCommand,
+  summarizeGeneration,
+  type GenerationSummaryInput,
+  type GenerationSummaryResult,
   type PlannedChatCommand,
   type RecipeGenerationInput,
   type RecipeGenerationResult,
@@ -184,6 +187,10 @@ export interface MenuChatInput {
 export interface CachedMenuChatResponse {
   text: string
   providerConfigured: boolean
+  cacheHit: boolean
+}
+
+export interface CachedGenerationSummary extends GenerationSummaryResult {
   cacheHit: boolean
 }
 
@@ -375,10 +382,33 @@ interface WeekRepairAction {
   delta: NutritionTotals
 }
 
+interface WeekRepairRequest {
+  reason: WeekRepairIssue['reason']
+  message: string
+  attempt: number
+  maxAttempts: number
+  dayIndex?: number
+  slot?: MealSlot
+  title?: string
+}
+
+interface WeekRepairResult {
+  repaired: boolean
+  retry: boolean
+  notes: string[]
+  attempt: number
+  reason: WeekRepairIssue['reason']
+  dayIndex?: number
+  slot?: MealSlot
+  actionCount: number
+}
+
 interface WeekRepairTrace {
   attempted: boolean
   maxAttempts: number
   issuesBefore: WeekRepairIssue[]
+  repairRequests: WeekRepairRequest[]
+  repairResults: WeekRepairResult[]
   actions: WeekRepairAction[]
   issuesAfter: WeekRepairIssue[]
   repaired: boolean
@@ -388,6 +418,7 @@ const RECIPE_GENERATION_SCHEMA_VERSION = 'menumaker_recipe_candidates:v1'
 const WEEK_SKELETON_SCHEMA_VERSION = 'menumaker_week_skeleton:v1'
 const CHAT_COMMAND_SCHEMA_VERSION = 'menumaker_chat_command:v1'
 const MENU_CHAT_SCHEMA_VERSION = 'menumaker_menu_chat:v1'
+const GENERATION_SUMMARY_SCHEMA_VERSION = 'menumaker_generation_summary:v1'
 
 const replacementSlotShares: Record<MealSlot, number> = {
   breakfast: 0.23,
@@ -542,6 +573,20 @@ export async function chatWithMenuContextCached(input: MenuChatInput): Promise<C
   if (cached) return { ...cached, cacheHit: true }
   const result = await chatWithMenuContext(input)
   if (result.providerConfigured) await writeAiCache(MENU_CHAT_SCHEMA_VERSION, cacheInput, result)
+  return { ...result, cacheHit: false }
+}
+
+export async function summarizeGenerationCached(input: GenerationSummaryInput): Promise<CachedGenerationSummary> {
+  const status = codexStatus()
+  const cacheInput = compactGenerationSummaryInput(input)
+  if (!status.configured) {
+    const response = await summarizeGeneration(input)
+    return { ...response, cacheHit: false }
+  }
+  const cached = await readAiCache<GenerationSummaryResult>(GENERATION_SUMMARY_SCHEMA_VERSION, cacheInput)
+  if (cached) return { ...cached, cacheHit: true }
+  const result = await summarizeGeneration(input)
+  if (result.source === 'llm') await writeAiCache(GENERATION_SUMMARY_SCHEMA_VERSION, cacheInput, { ...result, cacheHit: false })
   return { ...result, cacheHit: false }
 }
 
@@ -776,10 +821,30 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   try {
     weekRecipes = await buildRecipesForWeek(profile, input.target)
   } catch (error) {
+    const failureLogs = ['En cola', 'Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación']
+    const generationSummary = await summarizeGenerationCached({
+      locale: profile.locale,
+      profileName: profile.name,
+      jobId,
+      status: 'failed',
+      kind: input.kind,
+      target: input.target,
+      weeklyNutrition: null,
+      recipeSource: null,
+      fallbackSlots: [],
+      repair: null,
+      logs: failureLogs,
+      failureCode: 'generation_exhausted',
+      error: error instanceof Error ? error.message : String(error),
+    })
     await sql`
       update generation_jobs set status = 'failed',
         failure_code = 'generation_exhausted',
-        logs = ${sql.json(['En cola', 'Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
+        logs = ${sql.json(failureLogs as any)},
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({
+          jobInput: input,
+          generationSummary,
+        } as any)}::jsonb,
         error = ${error instanceof Error ? error.message : String(error)},
         updated_at = now()
       where id = ${jobId} and user_id = ${localUserId()}
@@ -824,18 +889,40 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   }
 
   const weeklyNutrition = sumNutrition(dayNutrition)
-  await sql`update weekly_menus set nutrition_snapshot = ${sql.json(weeklyNutrition as any)} where id = ${menu.id}`
+  const completedLogs = [
+    'En cola',
+    'Construyendo semana',
+    weekRecipes.skeletonTrace.fallbackUsed ? 'Usando esqueleto semanal determinístico' : 'Generando esqueleto semanal con LLM',
+    weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
+    weekRecipes.repair.attempted ? 'Reparando selección semanal' : 'Validando calidad semanal',
+    'Calculando nutrición',
+    'Resumiendo generación',
+    'Finalizando',
+  ]
+  const generationSummary = await summarizeGenerationCached({
+    locale: profile.locale,
+    profileName: profile.name,
+    jobId,
+    status: 'completed',
+    kind: input.kind,
+    target: input.target,
+    weeklyNutrition,
+    recipeSource: weekRecipes.source,
+    fallbackSlots: weekRecipes.fallbackSlots,
+    repair: weekRecipes.repair,
+    logs: completedLogs,
+    failureCode: null,
+    error: null,
+  })
+  await sql`
+    update weekly_menus
+    set nutrition_snapshot = ${sql.json(weeklyNutrition as any)},
+      generation_settings = generation_settings || ${sql.json({ generationSummary } as any)}::jsonb
+    where id = ${menu.id}
+  `
   await sql`
     update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
-      logs = ${sql.json([
-        'En cola',
-        'Construyendo semana',
-        weekRecipes.skeletonTrace.fallbackUsed ? 'Usando esqueleto semanal determinístico' : 'Generando esqueleto semanal con LLM',
-        weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
-        weekRecipes.repair.attempted ? 'Reparando selección semanal' : 'Validando calidad semanal',
-        'Calculando nutrición',
-        'Finalizando',
-      ] as any)},
+      logs = ${sql.json(completedLogs as any)},
       result = ${sql.json({
         jobInput: input,
         menuId: menu.id,
@@ -844,6 +931,7 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
         weekSkeletonTrace: weekRecipes.skeletonTrace,
         repair: weekRecipes.repair,
         trace: weekRecipes.trace,
+        generationSummary,
       } as any)}, updated_at = now()
     where id = ${jobId} and user_id = ${localUserId()}
   `
@@ -2131,7 +2219,7 @@ function chooseWeekRecipe(input: GeneratedScoredRecipe[], context: {
   return scored.sort((left, right) => right.score - left.score)[0]?.item.recipe ?? input[0]!.recipe
 }
 
-function repairWeekRecipeSelection(
+export function repairWeekRecipeSelection(
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
   pools: Map<MealSlot, RecipePoolResult>,
   targets: MacroTargets,
@@ -2139,8 +2227,10 @@ function repairWeekRecipeSelection(
   const maxAttempts = 2
   const issuesBefore = evaluateWeekRecipeSelection(days, targets)
   const actions: WeekRepairAction[] = []
+  const repairRequests: WeekRepairRequest[] = []
+  const repairResults: WeekRepairResult[] = []
   if (issuesBefore.length === 0) {
-    return { attempted: false, maxAttempts, issuesBefore, actions, issuesAfter: [], repaired: true }
+    return { attempted: false, maxAttempts, issuesBefore, repairRequests, repairResults, actions, issuesAfter: [], repaired: true }
   }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -2148,14 +2238,27 @@ function repairWeekRecipeSelection(
     if (issues.length === 0) break
     let changed = false
     for (const issue of issues) {
+      repairRequests.push(repairRequestFromIssue(issue, attempt, maxAttempts))
       const replacement = findRepairReplacement(days, pools, targets, issue)
-      if (!replacement) continue
+      if (!replacement) {
+        repairResults.push({
+          repaired: false,
+          retry: attempt < maxAttempts,
+          notes: ['No se encontró un reemplazo que mejorara el menú completo.'],
+          attempt,
+          reason: issue.reason,
+          dayIndex: issue.dayIndex,
+          slot: issue.slot,
+          actionCount: 0,
+        })
+        continue
+      }
       const previous = days[replacement.dayIndex]![replacement.mealIndex]!
       days[replacement.dayIndex]![replacement.mealIndex] = {
         slot: previous.slot,
         recipe: replacement.candidate.recipe,
       }
-      actions.push({
+      const action = {
         attempt,
         reason: issue.reason,
         dayIndex: replacement.dayIndex,
@@ -2163,6 +2266,17 @@ function repairWeekRecipeSelection(
         previousTitle: previous.recipe.title,
         nextTitle: replacement.candidate.recipe.title,
         delta: diffNutrition(replacement.candidate.recipe.nutrition, previous.recipe.nutrition),
+      }
+      actions.push(action)
+      repairResults.push({
+        repaired: true,
+        retry: false,
+        notes: [`${action.previousTitle} reemplazado por ${action.nextTitle}.`],
+        attempt,
+        reason: issue.reason,
+        dayIndex: replacement.dayIndex,
+        slot: previous.slot,
+        actionCount: 1,
       })
       changed = true
     }
@@ -2174,9 +2288,23 @@ function repairWeekRecipeSelection(
     attempted: true,
     maxAttempts,
     issuesBefore,
+    repairRequests,
+    repairResults,
     actions,
     issuesAfter,
     repaired: issuesAfter.length === 0,
+  }
+}
+
+function repairRequestFromIssue(issue: WeekRepairIssue, attempt: number, maxAttempts: number): WeekRepairRequest {
+  return {
+    reason: issue.reason,
+    message: issue.message,
+    attempt,
+    maxAttempts,
+    dayIndex: issue.dayIndex,
+    slot: issue.slot,
+    title: issue.title,
   }
 }
 
@@ -2451,6 +2579,94 @@ function compactMenuForChatCache(menu: unknown): unknown {
         nutrition: meal.nutrition,
       })),
     })) ?? [],
+  }
+}
+
+function compactGenerationSummaryInput(input: GenerationSummaryInput): GenerationSummaryInput {
+  return {
+    ...input,
+    target: {
+      ...input.target,
+      notes: [],
+    },
+    weeklyNutrition: input.weeklyNutrition ? compactNutrition(input.weeklyNutrition) : null,
+    repair: compactRepairTrace(input.repair),
+    logs: input.logs.slice(-12),
+    error: input.error ? input.error.slice(0, 500) : null,
+  }
+}
+
+function compactRepairTrace(repair: unknown): unknown {
+  if (!repair || typeof repair !== 'object') return null
+  const current = repair as {
+    attempted?: boolean
+    repaired?: boolean
+    maxAttempts?: number
+    issuesBefore?: WeekRepairIssue[]
+    issuesAfter?: WeekRepairIssue[]
+    actions?: WeekRepairAction[]
+    repairRequests?: WeekRepairRequest[]
+    repairResults?: WeekRepairResult[]
+  }
+  return {
+    attempted: Boolean(current.attempted),
+    repaired: Boolean(current.repaired),
+    maxAttempts: current.maxAttempts,
+    issuesBefore: current.issuesBefore?.map(compactRepairIssue) ?? [],
+    issuesAfter: current.issuesAfter?.map(compactRepairIssue) ?? [],
+    actions: current.actions?.map((action) => ({
+      attempt: action.attempt,
+      reason: action.reason,
+      dayIndex: action.dayIndex,
+      slot: action.slot,
+      previousTitle: action.previousTitle,
+      nextTitle: action.nextTitle,
+      delta: compactNutrition(action.delta),
+    })) ?? [],
+    repairRequests: current.repairRequests?.map(compactRepairRequest) ?? [],
+    repairResults: current.repairResults?.map((result) => ({
+      repaired: result.repaired,
+      retry: result.retry,
+      attempt: result.attempt,
+      reason: result.reason,
+      dayIndex: result.dayIndex,
+      slot: result.slot,
+      actionCount: result.actionCount,
+      notes: result.notes,
+    })) ?? [],
+  }
+}
+
+function compactRepairIssue(issue: WeekRepairIssue): Record<string, unknown> {
+  return {
+    reason: issue.reason,
+    dayIndex: issue.dayIndex,
+    slot: issue.slot,
+    title: issue.title,
+    message: issue.message,
+  }
+}
+
+function compactRepairRequest(request: WeekRepairRequest): Record<string, unknown> {
+  return {
+    reason: request.reason,
+    message: request.message,
+    attempt: request.attempt,
+    maxAttempts: request.maxAttempts,
+    dayIndex: request.dayIndex,
+    slot: request.slot,
+    title: request.title,
+  }
+}
+
+function compactNutrition(nutrition: NutritionTotals): NutritionTotals {
+  return {
+    calories: round(nutrition.calories),
+    proteinG: round(nutrition.proteinG),
+    carbsG: round(nutrition.carbsG),
+    fatG: round(nutrition.fatG),
+    fiberG: round(nutrition.fiberG ?? 0),
+    confidence: nutrition.confidence,
   }
 }
 

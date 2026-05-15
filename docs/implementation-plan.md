@@ -221,6 +221,8 @@ Implement:
 - AI cache reads/writes for successful structured week skeleton generations.
 - AI cache reads/writes for chat tool planning.
 - AI cache reads/writes for menu-context chat responses.
+- AI cache reads/writes for successful generation-summary calls.
+- Structured deterministic repair telemetry recorded as `RepairRequest` / `RepairResult` entries in the weekly menu and generation job trace.
 
 Acceptance:
 
@@ -231,6 +233,7 @@ Acceptance:
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
 - Menu generation metadata records recipe source, skeleton source, fallback slots, fallback policy, repair trace, and AI-cache hits.
 - Chat responses can report cache hits without exposing provider tokens.
+- Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

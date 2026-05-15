@@ -153,7 +153,7 @@ When chat infers a durable change, it should return or trigger a proposal that t
 
 For calorie target changes, chat should use the calorie adjustment policy from ADR 0009. The assistant should show a summarized plan before confirmation, including portion changes, ingredient rebalances, recipe replacements, preserved locks, macro impact, and warnings. The chat should not apply the target change until the user confirms the pending action.
 
-Successful chat tool-planner calls and menu-context chat responses should be cached in `ai_cache` using the same input-hash, model, reasoning effort, and schema-version policy as recipe and skeleton generation. Cache keys must include the relevant profile/menu context so stale answers are not reused across different menus.
+Successful chat tool-planner calls, menu-context chat responses, and generation-summary calls should be cached in `ai_cache` using the same input-hash, model, reasoning effort, and schema-version policy as recipe and skeleton generation. Cache keys must include the relevant profile/menu/job context so stale answers are not reused across different menus or generation runs.
 
 ## Local Runtime
 

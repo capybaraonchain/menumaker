@@ -557,6 +557,7 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
   const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { slots?: Record<string, any> } : null
   const skeletonTrace = settings.weekSkeletonTrace && typeof settings.weekSkeletonTrace === 'object' ? settings.weekSkeletonTrace as Record<string, any> : null
   const repair = settings.repair && typeof settings.repair === 'object' ? settings.repair as { attempted?: boolean; actions?: unknown[]; repaired?: boolean } : null
+  const generationSummary = generationSummaryText(settings.generationSummary)
   const slotTraces = Object.values(trace?.slots ?? {})
   const cacheHits = slotTraces.filter((item) => item?.cacheHit).length
   const source = String(settings.recipeSource ?? '')
@@ -571,7 +572,7 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
     return (
       <section className="generation-notice warning">
         <strong>Fallback usado</strong>
-        <span>{details}.</span>
+        <span>{generationSummary ?? `${details}.`}</span>
       </section>
     )
   }
@@ -584,7 +585,7 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
     return (
       <section className="generation-notice">
         <strong>Plan LLM validado</strong>
-        <span>{details}</span>
+        <span>{generationSummary ?? details}</span>
       </section>
     )
   }
@@ -594,6 +595,12 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
       <span>Este menú fue creado antes de registrar fuente, fallback y caché.</span>
     </section>
   )
+}
+
+function generationSummaryText(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const summary = String((value as { summary?: unknown }).summary ?? '').trim()
+  return summary || null
 }
 
 function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { jobs: GenerationJob[]; profileId?: string; onAction: (payload: any) => Promise<any>; compact?: boolean }) {
@@ -617,6 +624,7 @@ function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { j
               <span className="job-status">{jobStatusLabel(job.status)}</span>
               <strong>{jobKindLabel(job.kind)}</strong>
               <small>{jobFailureText(job)}</small>
+              {generationSummaryText(job.result?.generationSummary) && <small>{generationSummaryText(job.result.generationSummary)}</small>}
               {job.logs.length > 0 && <small>Último paso: {job.logs[job.logs.length - 1]}</small>}
             </div>
             {job.status === 'failed' && (

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { MacroTargets, MealSlot, RecipeCandidate } from '@menumaker/core'
 import { scoreRecipe, templatesForSlot } from '@menumaker/nutrition'
-import { deterministicWeekSkeleton, evaluateWeekRecipeSelection, type ProfileRow } from './appService'
+import { deterministicWeekSkeleton, evaluateWeekRecipeSelection, repairWeekRecipeSelection, type ProfileRow } from './appService'
 
 const profile: ProfileRow = {
   id: '22222222-2222-4222-8222-222222222222',
@@ -56,6 +56,30 @@ test('quality evaluation flags absurdly low daily calories before persistence', 
   ]))
   const issues = evaluateWeekRecipeSelection(days, target(2350))
   assert.ok(issues.some((issue) => issue.reason === 'daily_calorie_drift'))
+})
+
+test('repair trace records structured requests and results', () => {
+  const repeated = scoredTemplate('breakfast', 0)
+  const days = Array.from({ length: 7 }, (_, dayIndex) => ([
+    { slot: 'breakfast' as MealSlot, recipe: repeated },
+    { slot: 'lunch' as MealSlot, recipe: uniqueScaledScoredTemplate('lunch', 0, 1, `${dayIndex}-lunch`) },
+    { slot: 'dinner' as MealSlot, recipe: uniqueScaledScoredTemplate('dinner', 0, 1, `${dayIndex}-dinner`) },
+    { slot: 'snack' as MealSlot, recipe: uniqueScaledScoredTemplate('snack', 0, 1, `${dayIndex}-snack`) },
+  ]))
+  const trace = repairWeekRecipeSelection(days, new Map([
+    ['breakfast', {
+      recipes: [
+        { recipe: repeated, source: 'template' },
+        { recipe: uniqueScaledScoredTemplate('breakfast', 1, 1, 'replacement-a'), source: 'template' },
+        { recipe: uniqueScaledScoredTemplate('breakfast', 2, 1, 'replacement-b'), source: 'template' },
+      ],
+    } as any],
+  ]), target(2200))
+
+  assert.equal(trace.attempted, true)
+  assert.ok(trace.repairRequests.some((request) => request.reason === 'repetition_conflict'))
+  assert.ok(trace.repairResults.some((result) => result.reason === 'repetition_conflict'))
+  assert.ok(trace.actions.length > 0)
 })
 
 function scoredTemplate(slot: MealSlot, index: number) {
