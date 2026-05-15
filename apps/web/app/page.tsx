@@ -748,6 +748,11 @@ function GenerationJobsPanel({
                 <RefreshCw /> Reintentar
               </button>
             )}
+            {(job.status === 'queued' || job.status === 'running') && (
+              <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'cancelGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
+                <X /> Cancelar
+              </button>
+            )}
           </article>
         ))}
       </div>
@@ -1038,7 +1043,7 @@ function HistoryScreen({ state }: { state: AppState }) {
           <h2>Trabajos de generación</h2>
           {state.generationJobs.map((job) => (
             <article key={job.id} className={`history-row job-history ${job.status}`}>
-              {job.status === 'failed' ? <AlertTriangle /> : job.status === 'completed' ? <Check /> : <LoaderCircle />}
+              {job.status === 'failed' ? <AlertTriangle /> : job.status === 'completed' ? <Check /> : job.status === 'cancelled' ? <X /> : <LoaderCircle />}
               <span>
                 <strong>{jobKindLabel(job.kind)} · {jobStatusLabel(job.status)}</strong>
                 <small>{formatDateTime(job.updatedAt)} · {job.failureCode ? jobFailureLabel(job.failureCode) : `${job.logs.length} paso(s) registrados`}</small>
@@ -1290,6 +1295,7 @@ function jobStatusLabel(status: string): string {
   if (status === 'running') return 'En curso'
   if (status === 'completed') return 'Completado'
   if (status === 'failed') return 'Falló'
+  if (status === 'cancelled') return 'Cancelado'
   return status
 }
 
@@ -1320,6 +1326,7 @@ function jobFailureLabel(code: string): string {
 }
 
 function jobFailureText(job: GenerationJob): string {
+  if (job.status === 'cancelled') return 'Cancelado por el usuario.'
   if (job.status !== 'failed') return job.logs.length > 0 ? `${job.logs.length} paso(s) registrados.` : 'Esperando actualización.'
   const label = job.failureCode ? jobFailureLabel(job.failureCode) : 'Error de generación'
   if (job.error) return `${label}: ${job.error}`

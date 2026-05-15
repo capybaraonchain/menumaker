@@ -256,6 +256,11 @@ p {
   border-color: rgba(162, 58, 43, 0.26);
 }
 
+.job-row.cancelled,
+.job-history.cancelled {
+  opacity: 0.72;
+}
+
 .job-row > div {
   min-width: 0;
   display: grid;

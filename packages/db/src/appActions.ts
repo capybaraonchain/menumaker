@@ -3,6 +3,7 @@ import {
   applyCalorieAdjustmentPlan,
   applyRegenerationPlan,
   applySimilarIngredientReplacements,
+  cancelGenerationJob,
   deleteProfile,
   enqueuePreviewGenerationJob,
   enqueueWeeklyMenuGenerationJob,
@@ -130,6 +131,10 @@ export const appActionSchemas = {
     exportBeforeDelete: z.boolean().default(true),
   }),
   retryGenerationJob: z.object({
+    profileId: uuid.optional(),
+    jobId: uuid,
+  }),
+  cancelGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
   }),
@@ -501,6 +506,21 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  cancelGenerationJob: {
+    name: 'cancelGenerationJob',
+    inputSchema: appActionSchemas.cancelGenerationJob,
+    requiresConfirmation: false,
+    auditLabel: 'mutation.cancel_generation_job',
+    confirmationCopyEs: () => '',
+    successCopyEs: () => 'Cancelado. El trabajo no seguirá avanzando.',
+    async execute(input) {
+      const result = await cancelGenerationJob(input.jobId)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId ?? result.job.profileId ?? undefined),
+      }
+    },
+  },
   relaxProfilePreferences: {
     name: 'relaxProfilePreferences',
     inputSchema: appActionSchemas.relaxProfilePreferences,
@@ -844,6 +864,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'deleteProfile') return 'Eliminar perfil'
   if (name === 'resetLocalData') return 'Borrar datos locales'
   if (name === 'retryGenerationJob') return 'Reintentar generación'
+  if (name === 'cancelGenerationJob') return 'Cancelar generación'
   if (name === 'relaxProfilePreferences') return 'Relajar preferencias'
   if (name === 'startWeeklyMenuGeneration') return 'Generar semana'
   if (name === 'runGenerationJob') return 'Ejecutar generación'

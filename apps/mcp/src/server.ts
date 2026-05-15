@@ -297,6 +297,16 @@ server.registerTool(
 )
 
 server.registerTool(
+  'cancel_generation_job',
+  {
+    description: 'Mutation: cancel a queued or running generation/preview job. Does not delete menus or recipes.',
+    inputSchema: { profileId: z.string().uuid().optional(), jobId: z.string().uuid() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, jobId }) => json(await executeAppAction('cancelGenerationJob', { profileId, jobId }, 'mcp')),
+)
+
+server.registerTool(
   'relax_profile_preferences',
   {
     description: 'Mutation: remove selected dislikes or banned foods from a profile as a guided remediation step. Requires confirmed=true.',

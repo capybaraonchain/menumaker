@@ -197,7 +197,7 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation still executes inside requests by default, but weekly generation and long preview flows are now job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves the job to running and completed/failed. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full background worker queues, streaming progress, and cancellation remain deferred.
+Local v1 generation still executes inside requests by default, but weekly generation and long preview flows are now job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves the job to running and completed/failed/cancelled. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full background worker queues and streaming progress remain deferred.
 
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
@@ -206,6 +206,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] MCP exposes enqueue and run tools for weekly generation jobs.
 - [x] Regeneration and calorie preview plans can be queued and executed through shared app actions.
 - [x] MCP exposes enqueue and run tools for preview generation jobs.
+- [x] Queued/running generation and preview jobs can be cancelled from the app action registry, web UI, and MCP.
 - [x] Semana shows failed/running jobs instead of hiding them in database logs.
 - [x] Historial shows generation jobs alongside stored menus.
 - [x] Failed jobs can be retried through a typed action.
@@ -253,6 +254,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] `apply_similar_replacements` works through the shared app action registry.
 - [x] `preview_calorie_adjustment_plan` works.
 - [x] `enqueue_preview_generation_job` and `run_preview_generation_job` work for server-owned preview plans.
+- [x] `cancel_generation_job` works for queued/running generation and preview jobs.
 - [x] Mutation tools preserve locks and product rules.
 - [x] Broad/persistent MCP changes require confirmation.
 - [x] Companion skill exists.

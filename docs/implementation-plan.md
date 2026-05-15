@@ -214,6 +214,7 @@ Implement:
 - A reusable preview-generation runner that stores the exact server-owned plan in `generation_jobs.result.plan` for regeneration and calorie-adjustment previews.
 - Job state transitions.
 - Job logs.
+- Job cancellation for queued/running weekly-generation and preview-generation jobs.
 - Code-specific remediation metadata persisted in `generation_jobs.result.remediation` for failed jobs.
 - Repair-issue remediation metadata persisted in menu/job generation settings when bounded repair cannot fully resolve the week.
 - Guided profile-preference relaxation through the shared app action registry.

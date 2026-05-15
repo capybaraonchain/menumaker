@@ -165,11 +165,13 @@ export interface MenuHistoryItem {
   nutrition: NutritionTotals
 }
 
+export type GenerationJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string
+
 export interface GenerationJobView {
   id: string
   profileId: string | null
   weeklyMenuId: string | null
-  status: 'queued' | 'running' | 'completed' | 'failed' | string
+  status: GenerationJobStatus
   kind: string
   failureCode: string | null
   logs: string[]
@@ -186,6 +188,12 @@ export interface RetryGenerationJobResult {
   newJobId: string
   retryOfKind: string
   menu: WeeklyMenuView
+}
+
+export interface CancelGenerationJobResult {
+  job: GenerationJobView
+  cancelled: boolean
+  markdown: string
 }
 
 export interface RelaxProfilePreferencesResult {
@@ -1080,6 +1088,7 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
     where id = ${jobId} and user_id = ${localUserId()}
   `
   if (!job) throw new Error('Trabajo de generación no encontrado.')
+  if (job.status === 'cancelled') throw new Error('Este trabajo fue cancelado.')
   if (job.status === 'completed') {
     const [completed] = await sql`select weekly_menu_id from generation_jobs where id = ${jobId} and user_id = ${localUserId()}`
     if (completed?.weekly_menu_id) return getWeeklyMenu(completed.weekly_menu_id)
@@ -1142,6 +1151,8 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
     `
     throw error
   }
+
+  await assertJobNotCancelled(jobId)
 
   const [menu] = await sql<[{ id: string }]>`
     insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
@@ -1259,6 +1270,7 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
   `
   if (!job) throw new Error('Trabajo de previsualización no encontrado.')
   if (!String(job.kind).startsWith('preview_')) throw new Error('Este trabajo no es una previsualización.')
+  if (job.status === 'cancelled') throw new Error('Este trabajo fue cancelado.')
   if (job.status === 'completed') {
     const result = job.result && typeof job.result === 'object' ? job.result as { plan?: RegenerationPlan | CalorieAdjustmentPlan } : {}
     if (!result.plan) throw new Error('La previsualización completada no tiene plan guardado.')
@@ -1281,6 +1293,7 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
 
   try {
     const plan = await previewPlanFromJobInput(input)
+    await assertJobNotCancelled(jobId)
     const logs = ['En cola', 'Generando previsualización', 'Plan guardado']
     const [updated] = await sql`
       update generation_jobs set status = 'completed',
@@ -1293,6 +1306,7 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
     `
     return { job: generationJobFromRow(updated), plan }
   } catch (error) {
+    if (error instanceof Error && error.message.includes('cancelado')) throw error
     const failureCode = classifyGenerationFailure(error)
     const remediation = buildGenerationRemediationPlan({
       code: failureCode,
@@ -1484,6 +1498,51 @@ export async function retryGenerationJob(jobId: string): Promise<RetryGeneration
     retryOfKind: String(job.kind),
     menu,
   }
+}
+
+export async function cancelGenerationJob(jobId: string): Promise<CancelGenerationJobResult> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (!job) throw new Error('Trabajo de generación no encontrado.')
+  if (job.status === 'completed') throw new Error('No se puede cancelar un trabajo completado.')
+  if (job.status === 'failed') throw new Error('No se puede cancelar un trabajo fallido; puedes reintentarlo o dejarlo en historial.')
+  if (job.status === 'cancelled') {
+    return {
+      job: generationJobFromRow(job),
+      cancelled: false,
+      markdown: 'Este trabajo ya estaba cancelado.',
+    }
+  }
+  const logs = Array.isArray(job.logs) ? [...job.logs.map(String), 'Cancelado por el usuario'] : ['Cancelado por el usuario']
+  const [updated] = await sql`
+    update generation_jobs
+    set status = 'cancelled',
+      logs = ${sql.json(logs as any)},
+      error = null,
+      result = coalesce(result, '{}'::jsonb) || ${sql.json({ cancelledAt: new Date().toISOString() } as any)}::jsonb,
+      updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()} and status in ('queued', 'running')
+    returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+  `
+  if (!updated) throw new Error('No se pudo cancelar el trabajo.')
+  return {
+    job: generationJobFromRow(updated),
+    cancelled: true,
+    markdown: 'Cancelado. El trabajo no seguirá avanzando.',
+  }
+}
+
+async function assertJobNotCancelled(jobId: string): Promise<void> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select status from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (job?.status === 'cancelled') throw new Error('Este trabajo fue cancelado.')
 }
 
 function weeklyMenuJobInputFromResult(result: unknown): WeeklyMenuGenerationJobInput {
