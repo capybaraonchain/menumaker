@@ -137,10 +137,10 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Deterministic ingredient catalog covers the initial templates plus a broader common-food set for LLM-generated recipes.
 - [x] Ambiguous household units use food-specific serving conversions when available and downgrade confidence when falling back to generic estimates.
 - [x] Deterministic menu scoring exists.
-- [x] Weekly assembly runs bounded deterministic repair for repetition, daily calorie drift, and low weekly protein before persistence.
+- [x] Weekly assembly runs bounded deterministic repair for repetition, daily calorie drift, banned foods, unknown nutrition, and low weekly protein before persistence.
 - [x] Weekly repair traces include structured `RepairRequest` / `RepairResult` telemetry.
 - [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
-- [x] Weekly quality tests cover skeleton coverage, excessive repetition, and absurd daily calorie drift.
+- [x] Weekly quality tests cover skeleton coverage, excessive repetition, absurd daily calorie drift, banned-food leakage, unknown nutrition, and hard-constraint repair.
 - [x] Failure states are explicit in domain schemas and job storage.
 - [x] Completed weekly menu is saved as structured rows.
 

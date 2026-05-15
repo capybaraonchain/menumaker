@@ -58,6 +58,79 @@ test('quality evaluation flags absurdly low daily calories before persistence', 
   assert.ok(issues.some((issue) => issue.reason === 'daily_calorie_drift'))
 })
 
+test('quality evaluation flags banned foods before persistence', () => {
+  const banned = scoreRecipe({
+    ...templatesForSlot('lunch', [], 'es')[0]!,
+    title: 'Pollo con brócoli prohibido',
+    ingredients: [
+      ...templatesForSlot('lunch', [], 'es')[0]!.ingredients,
+      { name: 'brócoli', amount: 120, unit: 'g' },
+    ],
+  })
+  const days = Array.from({ length: 7 }, (_, dayIndex) => ([
+    { slot: 'breakfast' as MealSlot, recipe: uniqueScaledScoredTemplate('breakfast', 0, 1, `${dayIndex}-breakfast`) },
+    { slot: 'lunch' as MealSlot, recipe: dayIndex === 0 ? banned : uniqueScaledScoredTemplate('lunch', 1, 1, `${dayIndex}-lunch`) },
+    { slot: 'dinner' as MealSlot, recipe: uniqueScaledScoredTemplate('dinner', 0, 1, `${dayIndex}-dinner`) },
+    { slot: 'snack' as MealSlot, recipe: uniqueScaledScoredTemplate('snack', 0, 1, `${dayIndex}-snack`) },
+  ]))
+  const issues = evaluateWeekRecipeSelection(days, target(2200), { bannedFoods: ['brócoli'] })
+  assert.ok(issues.some((issue) => issue.reason === 'banned_item_conflict' && issue.dayIndex === 0 && issue.slot === 'lunch'))
+})
+
+test('repair replaces meals that violate banned-food constraints', () => {
+  const banned = scoreRecipe({
+    ...templatesForSlot('lunch', [], 'es')[0]!,
+    title: 'Comida con brócoli prohibido',
+    ingredients: [
+      ...templatesForSlot('lunch', [], 'es')[0]!.ingredients,
+      { name: 'brócoli', amount: 120, unit: 'g' },
+    ],
+  })
+  const clean = uniqueScaledScoredTemplate('lunch', 3, 1, 'clean')
+  const days = Array.from({ length: 7 }, (_, dayIndex) => ([
+    { slot: 'breakfast' as MealSlot, recipe: uniqueScaledScoredTemplate('breakfast', 0, 1, `${dayIndex}-breakfast`) },
+    { slot: 'lunch' as MealSlot, recipe: dayIndex === 0 ? banned : uniqueScaledScoredTemplate('lunch', 2, 1, `${dayIndex}-lunch`) },
+    { slot: 'dinner' as MealSlot, recipe: uniqueScaledScoredTemplate('dinner', 0, 1, `${dayIndex}-dinner`) },
+    { slot: 'snack' as MealSlot, recipe: uniqueScaledScoredTemplate('snack', 0, 1, `${dayIndex}-snack`) },
+  ]))
+  const trace = repairWeekRecipeSelection(days, new Map([
+    ['lunch', {
+      recipes: [
+        { recipe: banned, source: 'template' },
+        { recipe: clean, source: 'template' },
+      ],
+    } as any],
+  ]), target(2200), { bannedFoods: ['brócoli'] })
+
+  assert.equal(trace.attempted, true)
+  assert.ok(trace.issuesBefore.some((issue) => issue.reason === 'banned_item_conflict'))
+  assert.ok(trace.actions.some((action) => action.reason === 'banned_item_conflict' && action.nextTitle === clean.title))
+  assert.equal(evaluateWeekRecipeSelection(days, target(2200), { bannedFoods: ['brócoli'] }).some((issue) => issue.reason === 'banned_item_conflict'), false)
+})
+
+test('quality evaluation flags unknown nutrition before persistence', () => {
+  const unknown = scoreRecipe({
+    title: 'Bol con ingrediente desconocido',
+    locale: 'es',
+    description: 'Debe fallar por nutrición desconocida.',
+    servings: 1,
+    prepTimeMinutes: 15,
+    cuisine: 'casera',
+    flavorProfile: 'suave',
+    tags: [],
+    ingredients: [{ name: 'raíz lunar inventada', amount: 100, unit: 'g' }],
+    steps: ['Servir.'],
+  })
+  const days = Array.from({ length: 7 }, (_, dayIndex) => ([
+    { slot: 'breakfast' as MealSlot, recipe: dayIndex === 0 ? unknown : uniqueScaledScoredTemplate('breakfast', 0, 1, `${dayIndex}-breakfast`) },
+    { slot: 'lunch' as MealSlot, recipe: uniqueScaledScoredTemplate('lunch', 0, 1, `${dayIndex}-lunch`) },
+    { slot: 'dinner' as MealSlot, recipe: uniqueScaledScoredTemplate('dinner', 0, 1, `${dayIndex}-dinner`) },
+    { slot: 'snack' as MealSlot, recipe: uniqueScaledScoredTemplate('snack', 0, 1, `${dayIndex}-snack`) },
+  ]))
+  const issues = evaluateWeekRecipeSelection(days, target(2200))
+  assert.ok(issues.some((issue) => issue.reason === 'low_nutrition_confidence' && issue.title === unknown.title))
+})
+
 test('repair trace records structured requests and results', () => {
   const repeated = scoredTemplate('breakfast', 0)
   const days = Array.from({ length: 7 }, (_, dayIndex) => ([

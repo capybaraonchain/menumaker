@@ -182,7 +182,7 @@ Repair actions may include:
 
 The repair loop must have a retry limit. If the retry limit is reached, the generation job should return a clear failure state instead of looping indefinitely.
 
-Local v1 now includes a bounded deterministic repair pass during weekly assembly. It checks obvious repetition conflicts, absurd daily calorie drift, and low weekly protein before the menu is persisted. Each attempted repair emits structured `RepairRequest` / `RepairResult` telemetry into the weekly menu and generation job trace. This is not the final full LLM repair controller; future repair jobs should run asynchronously, allow LLM-authored proposals, and preserve retry logs.
+Local v1 now includes a bounded deterministic repair pass during weekly assembly. It checks obvious repetition conflicts, absurd daily calorie drift, banned-food leakage, unknown nutrition, and low weekly protein before the menu is persisted. Each attempted repair emits structured `RepairRequest` / `RepairResult` telemetry into the weekly menu and generation job trace. This is not the final full LLM repair controller; future repair jobs should run asynchronously, allow LLM-authored proposals, and preserve retry logs.
 
 ## Calorie Adjustment Rebalancing
 

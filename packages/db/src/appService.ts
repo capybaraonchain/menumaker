@@ -433,12 +433,23 @@ interface WeekSkeletonTrace {
   error?: string
 }
 
+type WeekRepairIssueReason =
+  | 'repetition_conflict'
+  | 'daily_calorie_drift'
+  | 'weekly_protein_low'
+  | 'banned_item_conflict'
+  | 'low_nutrition_confidence'
+
 interface WeekRepairIssue {
-  reason: 'repetition_conflict' | 'daily_calorie_drift' | 'weekly_protein_low'
+  reason: WeekRepairIssueReason
   dayIndex?: number
   slot?: MealSlot
   title?: string
   message: string
+}
+
+interface WeekQualityConstraints {
+  bannedFoods?: string[]
 }
 
 interface WeekRepairAction {
@@ -2114,7 +2125,7 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
     }
     days.push(dayItems)
   }
-  const repair = repairWeekRecipeSelection(days, pools, targets)
+  const repair = repairWeekRecipeSelection(days, pools, targets, { bannedFoods: profile.bannedFoods })
 
   const fallbackSlots = mealSlots.filter((slot) => pools.get(slot)?.source !== 'llm')
   const slotTraces = Object.fromEntries(mealSlots.map((slot) => [slot, pools.get(slot)!.trace])) as Record<MealSlot, RecipePoolTrace>
@@ -2575,9 +2586,10 @@ export function repairWeekRecipeSelection(
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
   pools: Map<MealSlot, RecipePoolResult>,
   targets: MacroTargets,
+  constraints: WeekQualityConstraints = {},
 ): WeekRepairTrace {
   const maxAttempts = 2
-  const issuesBefore = evaluateWeekRecipeSelection(days, targets)
+  const issuesBefore = evaluateWeekRecipeSelection(days, targets, constraints)
   const actions: WeekRepairAction[] = []
   const repairRequests: WeekRepairRequest[] = []
   const repairResults: WeekRepairResult[] = []
@@ -2586,12 +2598,12 @@ export function repairWeekRecipeSelection(
   }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const issues = evaluateWeekRecipeSelection(days, targets)
+    const issues = evaluateWeekRecipeSelection(days, targets, constraints)
     if (issues.length === 0) break
     let changed = false
     for (const issue of issues) {
       repairRequests.push(repairRequestFromIssue(issue, attempt, maxAttempts))
-      const replacement = findRepairReplacement(days, pools, targets, issue)
+      const replacement = findRepairReplacement(days, pools, targets, issue, constraints)
       if (!replacement) {
         repairResults.push({
           repaired: false,
@@ -2635,7 +2647,7 @@ export function repairWeekRecipeSelection(
     if (!changed) break
   }
 
-  const issuesAfter = evaluateWeekRecipeSelection(days, targets)
+  const issuesAfter = evaluateWeekRecipeSelection(days, targets, constraints)
   return {
     attempted: true,
     maxAttempts,
@@ -2665,8 +2677,9 @@ function findRepairReplacement(
   pools: Map<MealSlot, RecipePoolResult>,
   targets: MacroTargets,
   issue: WeekRepairIssue,
+  constraints: WeekQualityConstraints,
 ): { dayIndex: number; mealIndex: number; candidate: GeneratedScoredRecipe } | null {
-  const beforePenalty = weekPlanPenalty(days, targets)
+  const beforePenalty = weekPlanPenalty(days, targets, constraints)
   const usedTitles = titleCountsForDays(days)
   const candidates: Array<{ dayIndex: number; mealIndex: number; candidate: GeneratedScoredRecipe; penalty: number; score: number }> = []
   for (const [dayIndex, day] of days.entries()) {
@@ -2683,7 +2696,7 @@ function findRepairReplacement(
         if ((usedTitles.get(nextTitle) ?? 0) >= 2) continue
         const clone = days.map((items) => items.slice())
         clone[dayIndex]![mealIndex] = { slot: meal.slot, recipe: candidate.recipe }
-        const penalty = weekPlanPenalty(clone, targets)
+        const penalty = weekPlanPenalty(clone, targets, constraints)
         if (penalty >= beforePenalty) continue
         candidates.push({
           dayIndex,
@@ -2701,11 +2714,31 @@ function findRepairReplacement(
 export function evaluateWeekRecipeSelection(
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
   targets: MacroTargets,
+  constraints: WeekQualityConstraints = {},
 ): WeekRepairIssue[] {
   const issues: WeekRepairIssue[] = []
   const titleOccurrences = new Map<string, Array<{ dayIndex: number; slot: MealSlot; title: string }>>()
   for (const [dayIndex, day] of days.entries()) {
     for (const meal of day) {
+      const bannedFoods = matchingBannedFoods(meal.recipe, constraints.bannedFoods ?? [])
+      if (bannedFoods.length > 0) {
+        issues.push({
+          reason: 'banned_item_conflict',
+          dayIndex,
+          slot: meal.slot,
+          title: meal.recipe.title,
+          message: `${meal.recipe.title} contiene alimento prohibido: ${bannedFoods.join(', ')}.`,
+        })
+      }
+      if (hasUnknownIngredients(meal.recipe)) {
+        issues.push({
+          reason: 'low_nutrition_confidence',
+          dayIndex,
+          slot: meal.slot,
+          title: meal.recipe.title,
+          message: `${meal.recipe.title} tiene ingredientes sin nutrición determinística suficiente.`,
+        })
+      }
       const key = normalizeIngredientName(meal.recipe.title)
       const current = titleOccurrences.get(key) ?? []
       current.push({ dayIndex, slot: meal.slot, title: meal.recipe.title })
@@ -2751,7 +2784,11 @@ export function evaluateWeekRecipeSelection(
   return issues.slice(0, 12)
 }
 
-function weekPlanPenalty(days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>, targets: MacroTargets): number {
+function weekPlanPenalty(
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>,
+  targets: MacroTargets,
+  constraints: WeekQualityConstraints = {},
+): number {
   let penalty = 0
   const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
   penalty += Math.abs(weeklyNutrition.calories - targets.calories * 7) / Math.max(targets.calories * 7, 1) * 180
@@ -2761,6 +2798,8 @@ function weekPlanPenalty(days: Array<Array<{ slot: MealSlot; recipe: ReturnType<
     penalty += Math.abs(dayNutrition.calories - targets.calories) / Math.max(targets.calories, 1) * 35
     for (const meal of day) {
       penalty += Math.max(0, targetNutritionForSlot(targets, meal.slot).proteinG - meal.recipe.nutrition.proteinG) * 0.6
+      if (matchingBannedFoods(meal.recipe, constraints.bannedFoods ?? []).length > 0) penalty += 1000
+      if (hasUnknownIngredients(meal.recipe)) penalty += 1000
     }
     const dayTitles = new Set<string>()
     for (const meal of day) {
@@ -3421,6 +3460,10 @@ function recipeIncludes(recipe: { ingredients: Array<{ name: string }> }, ingred
 
 function recipeIncludesAny(recipe: { ingredients: Array<{ name: string }> }, avoidedFoods: string[]): boolean {
   return avoidedFoods.some((food) => recipeIncludes(recipe, food))
+}
+
+function matchingBannedFoods(recipe: { ingredients: Array<{ name: string }> }, bannedFoods: string[]): string[] {
+  return bannedFoods.filter((food) => recipeIncludes(recipe, food))
 }
 
 function replacementRequestScore(next: NutritionTotals, previous: NutritionTotals, request: ReplacementRequestFeatures): number {

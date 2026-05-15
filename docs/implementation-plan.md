@@ -269,7 +269,7 @@ Acceptance:
 - Locked items are preserved during regeneration.
 - Menu generation records whether candidates came from LLM, fallback templates, or a mixed pool.
 - Menu generation records whether the week skeleton came from LLM or deterministic fallback.
-- Weekly quality tests cover obvious recipe repetition and daily calorie drift.
+- Weekly quality tests cover skeleton coverage, obvious recipe repetition, daily calorie drift, banned-food leakage, unknown nutrition, and hard-constraint repair.
 - Failure states surface when targets are impossible or nutrition confidence is too low.
 
 ## Phase 6.5: Hybrid Calorie Adjustment Planner
