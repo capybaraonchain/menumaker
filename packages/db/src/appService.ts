@@ -25,6 +25,7 @@ import {
   type MacroMode,
   type MacroTargets,
   type MealSlot,
+  type NutritionConfidence,
   type NutritionTotals,
   type OnboardingInput,
   type RecipeCandidate,
@@ -210,6 +211,15 @@ export interface MappableFoodView {
   category: string
   aliases: string[]
   sources?: string[]
+  sourceId?: string
+  confidence?: NutritionConfidence
+  per100g?: Omit<NutritionTotals, 'confidence'>
+}
+
+export interface NutritionFoodSearchInput {
+  query: string
+  limit?: number
+  source?: string
 }
 
 export interface IngredientMappingView {
@@ -744,6 +754,35 @@ export async function listMappableFoods(): Promise<MappableFoodView[]> {
     aliases: unique([row.name, ...(row.aliases ?? [])]),
     sources: [...new Set(row.sources ?? [])].sort(),
   })).sort((left, right) => left.name.localeCompare(right.name, 'es'))
+}
+
+export async function searchNutritionFoods(input: NutritionFoodSearchInput): Promise<{ query: string; foods: MappableFoodView[] }> {
+  const query = input.query.trim()
+  if (query.length < 2) return { query, foods: [] }
+  const limit = Math.min(Math.max(input.limit ?? 12, 1), 50)
+  const normalizedQuery = normalizeIngredientName(query)
+  const sourceFilter = input.source?.trim()
+  const catalog = await nutritionCatalogForScoring()
+  const foods = catalog
+    .filter((food) => !sourceFilter || food.source === sourceFilter)
+    .map((food) => ({
+      food,
+      score: nutritionFoodSearchScore(food, normalizedQuery),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.food.canonicalName.localeCompare(right.food.canonicalName, 'es'))
+    .slice(0, limit)
+    .map(({ food }) => ({
+      id: food.id,
+      name: food.canonicalName,
+      category: food.category,
+      aliases: unique(food.aliases),
+      sources: unique([food.source]),
+      sourceId: food.sourceId,
+      confidence: food.confidence,
+      per100g: food.per100g,
+    }))
+  return { query, foods }
 }
 
 export async function saveIngredientMapping(
@@ -2851,6 +2890,22 @@ function resolveSeedFood(value: string) {
     if (normalizeIngredientName(food.canonicalName) === normalized) return true
     return food.aliases.some((alias) => normalizeIngredientName(alias) === normalized)
   }) ?? null
+}
+
+function nutritionFoodSearchScore(food: NutritionFood, normalizedQuery: string): number {
+  const haystack = [
+    food.id,
+    food.canonicalName,
+    food.category,
+    food.source,
+    ...(food.aliases ?? []),
+  ].map((item) => normalizeIngredientName(item)).filter(Boolean)
+  if (haystack.some((item) => item === normalizedQuery)) return 100
+  if (haystack.some((item) => item.startsWith(normalizedQuery))) return 75
+  if (haystack.some((item) => item.includes(normalizedQuery))) return 50
+  const tokens = normalizedQuery.split(/\s+/).filter((token) => token.length >= 3)
+  if (tokens.length > 0 && tokens.every((token) => haystack.some((item) => item.includes(token)))) return 25 + tokens.length
+  return 0
 }
 
 async function resolveMappableFood(value: string): Promise<MappableFoodView | null> {

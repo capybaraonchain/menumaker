@@ -14,6 +14,7 @@ import {
   MessageCircle,
   RefreshCw,
   Save,
+  Search,
   Sparkles,
   Star,
   Trash2,
@@ -97,7 +98,16 @@ type RuntimeSettings = {
     weekSkeletonFallback: string
   }
 }
-type MappableFood = { id: string; name: string; category: string; aliases: string[]; sources?: string[] }
+type MappableFood = {
+  id: string
+  name: string
+  category: string
+  aliases: string[]
+  sources?: string[]
+  sourceId?: string
+  confidence?: string
+  per100g?: Nutrition
+}
 type GenerationJob = {
   id: string
   profileId: string | null
@@ -1022,8 +1032,37 @@ function IngredientMappingModal({
 }) {
   const [ingredientName, setIngredientName] = useState(ingredientNameFromRemediation(plan, job))
   const [canonicalFoodName, setCanonicalFoodName] = useState(foods[0]?.name ?? '')
+  const [searchQuery, setSearchQuery] = useState(ingredientNameFromRemediation(plan, job))
+  const [searchResults, setSearchResults] = useState<MappableFood[]>([])
   const [error, setError] = useState<string | null>(null)
   const [localBusy, setLocalBusy] = useState<string | null>(null)
+  const currentOptions = searchResults.length > 0 ? searchResults : foods.slice(0, 25)
+
+  async function searchFoods() {
+    const query = searchQuery.trim() || ingredientName.trim()
+    if (query.length < 2) {
+      setError('Escribe al menos 2 letras para buscar en las fuentes nutricionales.')
+      return
+    }
+    setError(null)
+    setLocalBusy('search')
+    try {
+      const result = await onAction({
+        action: 'searchNutritionFoods',
+        profileId: profile.id,
+        query,
+        limit: 12,
+      }) as { foods?: MappableFood[] }
+      const nextResults = result.foods ?? []
+      setSearchResults(nextResults)
+      if (nextResults[0]) setCanonicalFoodName(nextResults[0].name)
+      if (nextResults.length === 0) setError('No encontré alimentos determinísticos para esa búsqueda. Importa una fuente o crea un alimento local.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo buscar en fuentes nutricionales.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
 
   async function apply(retry: boolean) {
     if (!ingredientName.trim() || !canonicalFoodName) {
@@ -1056,16 +1095,44 @@ function IngredientMappingModal({
         <p>{plan.summary}</p>
         <label>
           Ingrediente en la receta
-          <input value={ingredientName} onChange={(event) => setIngredientName(event.target.value)} placeholder="ej. queso fresco batido" />
+          <input value={ingredientName} onChange={(event) => {
+            setIngredientName(event.target.value)
+            setSearchQuery(event.target.value)
+          }} placeholder="ej. queso fresco batido" />
+        </label>
+        <label>
+          Buscar alimento determinístico
+          <div className="inline-field">
+            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="skyr, arroz, salmon..." />
+            <button className="secondary icon-button-text" type="button" disabled={localBusy !== null} onClick={searchFoods}>
+              <Search size={16} /> {localBusy === 'search' ? 'Buscando...' : 'Buscar'}
+            </button>
+          </div>
         </label>
         <label>
           Tratar como
           <select value={canonicalFoodName} onChange={(event) => setCanonicalFoodName(event.target.value)}>
-            {foods.map((food) => (
+            {currentOptions.map((food) => (
               <option key={food.id} value={food.name}>{food.name} · {food.category}</option>
             ))}
           </select>
         </label>
+        {searchResults.length > 0 && (
+          <div className="search-result-list">
+            {searchResults.map((food) => (
+              <button
+                key={`${food.id}-${food.sourceId ?? food.sources?.join('-') ?? 'source'}`}
+                type="button"
+                className={canonicalFoodName === food.name ? 'selected' : ''}
+                onClick={() => setCanonicalFoodName(food.name)}
+              >
+                <strong>{food.name}</strong>
+                <span>{food.category} · {(food.sources ?? []).join(', ') || 'fuente local'} · {food.confidence ?? 'database'}</span>
+                {food.per100g && <span>{Math.round(food.per100g.calories)} kcal · {roundOne(food.per100g.proteinG)}g P · {roundOne(food.per100g.carbsG)}g C · {roundOne(food.per100g.fatG)}g G /100g</span>}
+              </button>
+            ))}
+          </div>
+        )}
         <p className="muted">Esto guarda un alias confirmado y el scorer lo usará en generaciones, reemplazos y análisis nutricional.</p>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
@@ -1676,6 +1743,10 @@ function sourceSummary(counts: Record<string, number>): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' }).format(new Date(value))
+}
+
+function roundOne(value: number): string {
+  return Number(value).toFixed(1).replace(/\.0$/, '')
 }
 
 function formatDateTime(value: string): string {

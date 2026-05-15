@@ -28,6 +28,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   runGenerationJob: 'runGenerationJob',
   savePreference: 'savePreference',
   saveIngredientMapping: 'saveIngredientMapping',
+  searchNutritionFoods: 'searchNutritionFoods',
   importOpenFoodFactsProduct: 'importOpenFoodFactsProduct',
   importUsdaFoodDataCentralDownload: 'importUsdaFoodDataCentralDownload',
   createUserNutritionFood: 'createUserNutritionFood',

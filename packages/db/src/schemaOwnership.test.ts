@@ -135,3 +135,20 @@ test('target remediation saves revised macro targets through shared actions and 
   assert.match(webPage, /action: 'updateMacroTargetAndGenerate'/)
   assert.match(webPage, /onAdjustTargets\(\{ job, plan \}\)/)
 })
+
+test('ingredient remediation searches source-backed nutrition foods through shared actions and MCP', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+  const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
+
+  assert.match(appService, /export async function searchNutritionFoods/)
+  assert.match(appService, /nutritionCatalogForScoring\(\)/)
+  assert.match(appActions, /searchNutritionFoods: z\.object/)
+  assert.match(appActions, /auditLabel: 'read\.search_nutrition_foods'/)
+  assert.match(mcp, /'search_nutrition_foods'/)
+  assert.match(apiRoute, /searchNutritionFoods: 'searchNutritionFoods'/)
+  assert.match(webPage, /action: 'searchNutritionFoods'/)
+  assert.match(webPage, /Buscar alimento determinístico/)
+})

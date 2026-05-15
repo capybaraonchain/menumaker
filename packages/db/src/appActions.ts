@@ -21,6 +21,7 @@ import {
   runGenerationJob,
   saveIngredientMapping,
   saveProfilePreference,
+  searchNutritionFoods,
   setFallbackPolicy,
   relaxProfilePreferences,
   starRecipe,
@@ -179,6 +180,12 @@ export const appActionSchemas = {
     profileId: uuid,
     ingredientName: z.string().min(1),
     canonicalFoodName: z.string().min(1),
+  }),
+  searchNutritionFoods: z.object({
+    profileId: uuid.optional(),
+    query: z.string().min(2),
+    limit: z.number().int().positive().max(50).default(12),
+    source: z.string().min(1).optional(),
   }),
   importOpenFoodFactsProduct: z.object({
     profileId: uuid.optional(),
@@ -602,6 +609,22 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
         mapping,
         state: await appStateResult(input.profileId),
       }
+    },
+  },
+  searchNutritionFoods: {
+    name: 'searchNutritionFoods',
+    inputSchema: appActionSchemas.searchNutritionFoods,
+    requiresConfirmation: false,
+    auditLabel: 'read.search_nutrition_foods',
+    confirmationCopyEs: () => '',
+    successCopyEs: (_, result) => {
+      const foods = result && typeof result === 'object' && Array.isArray((result as { foods?: unknown[] }).foods)
+        ? (result as { foods: unknown[] }).foods.length
+        : 0
+      return `Encontré ${foods} alimento(s) determinístico(s).`
+    },
+    async execute(input) {
+      return searchNutritionFoods(input)
     },
   },
   importOpenFoodFactsProduct: {

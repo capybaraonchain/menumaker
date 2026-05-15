@@ -33,6 +33,7 @@ import {
   runGenerationJob,
   saveMacroTarget,
   saveProfilePreference,
+  searchNutritionFoods,
   starRecipe,
   suggestMealReplacements,
   unstarRecipe,
@@ -344,6 +345,20 @@ server.registerTool(
     requireConfirmation(confirmed, 'save ingredient mapping')
     return json(await executeAppAction('saveIngredientMapping', { profileId, ingredientName, canonicalFoodName }, 'mcp'))
   },
+)
+
+server.registerTool(
+  'search_nutrition_foods',
+  {
+    description: 'Read-only: search deterministic nutrition foods from imported/custom/seed source records for ingredient mapping and scoring.',
+    inputSchema: {
+      query: z.string().min(2),
+      limit: z.number().int().positive().max(50).default(12),
+      source: z.string().min(1).optional(),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ query, limit, source }) => json(await searchNutritionFoods({ query, limit, source })),
 )
 
 server.registerTool(

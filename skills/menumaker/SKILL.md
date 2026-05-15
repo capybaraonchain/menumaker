@@ -84,12 +84,13 @@ For macro questions:
 For ingredient matching issues:
 
 1. Inspect the failed job or low-confidence recipe ingredient.
-2. If the user has a packaged-product barcode, ask for confirmation and call `import_open_food_facts_product` before mapping aliases.
-3. If the user has a local USDA FoodData Central downloadable JSON file, ask for confirmation and call `import_usda_fdc_download`; this uses no API key and should target specific FDC IDs or a reasonable limit when possible.
-4. If no source record exists but the user can provide per-100g nutrition, ask for confirmation and call `create_user_nutrition_food`.
-5. Ask the user which deterministic food it should map to only when a source/custom food already exists or the issue is an alias.
-6. Call `save_ingredient_mapping` only after confirmation.
-7. Retry generation or rerun nutrition analysis through deterministic tools; do not bypass validation.
+2. Use `search_nutrition_foods` to find source-backed deterministic food candidates before asking the user to choose a canonical food.
+3. If the user has a packaged-product barcode, ask for confirmation and call `import_open_food_facts_product` before mapping aliases.
+4. If the user has a local USDA FoodData Central downloadable JSON file, ask for confirmation and call `import_usda_fdc_download`; this uses no API key and should target specific FDC IDs or a reasonable limit when possible.
+5. If no source record exists but the user can provide per-100g nutrition, ask for confirmation and call `create_user_nutrition_food`.
+6. Ask the user which deterministic food it should map to only when a source/custom/seed food already exists or the issue is an alias.
+7. Call `save_ingredient_mapping` only after confirmation.
+8. Retry generation or rerun nutrition analysis through deterministic tools; do not bypass validation.
 
 For in-app chat behavior:
 

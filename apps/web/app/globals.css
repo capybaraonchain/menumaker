@@ -376,6 +376,45 @@ p {
   gap: 8px;
 }
 
+.inline-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.icon-button-text {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.search-result-list {
+  display: grid;
+  gap: 8px;
+}
+
+.search-result-list button {
+  border: 1px solid var(--line);
+  background: #fffaf1;
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--ink);
+  text-align: left;
+  display: grid;
+  gap: 3px;
+}
+
+.search-result-list button.selected {
+  border-color: var(--accent);
+  background: #eef8f2;
+}
+
+.search-result-list span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.25;
+}
+
 .day-section {
   border-top: 1px solid var(--line);
   padding-top: 16px;
