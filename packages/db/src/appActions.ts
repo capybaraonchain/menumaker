@@ -3,6 +3,7 @@ import {
   applyCalorieAdjustmentPlan,
   applyRegenerationPlan,
   applySimilarIngredientReplacements,
+  deleteProfile,
   getAppState,
   lockDay,
   lockMeal,
@@ -108,6 +109,11 @@ export const appActionSchemas = {
     profileId: uuid,
     menuMealIds: z.array(uuid).default([]),
     ingredient: z.string().min(1),
+  }),
+  deleteProfile: z.object({
+    profileId: uuid,
+    expectedName: z.string().min(1),
+    exportBeforeDelete: z.boolean().default(true),
   }),
 } as const
 
@@ -376,6 +382,32 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  deleteProfile: {
+    name: 'deleteProfile',
+    inputSchema: appActionSchemas.deleteProfile,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.delete_profile',
+    confirmationCopyEs: (input) => `Se eliminará el perfil **${input.expectedName}** con sus menús, preferencias y recetas generadas que ya no se usen. Devolveré un snapshot de exportación en la respuesta. ¿Continuar?`,
+    successCopyEs: (_, result) => {
+      const deletedName = result && typeof result === 'object' && typeof (result as { deletedProfileName?: unknown }).deletedProfileName === 'string'
+        ? (result as { deletedProfileName: string }).deletedProfileName
+        : 'perfil'
+      const counts = result && typeof result === 'object'
+        ? (result as { export?: { counts?: { menus?: number; meals?: number; savedRecipes?: number } } }).export?.counts
+        : null
+      return [
+        `Listo. Eliminé **${deletedName}**.`,
+        counts ? `Snapshot incluido: ${counts.menus ?? 0} menú(s), ${counts.meals ?? 0} comida(s), ${counts.savedRecipes ?? 0} receta(s) guardadas.` : '',
+      ].filter(Boolean).join('\n\n')
+    },
+    async execute(input) {
+      const result = await deleteProfile(input.profileId, input.expectedName, input.exportBeforeDelete)
+      return {
+        ...result,
+        state: await appStateResult(result.remainingProfileId ?? undefined),
+      }
+    },
+  },
 }
 
 export async function executeAppAction<Name extends AppActionName>(
@@ -387,10 +419,10 @@ export async function executeAppAction<Name extends AppActionName>(
   const input = definition.inputSchema.parse(rawInput)
   try {
     const result = await definition.execute(input as never)
-    await logActionEvent(name, definition.auditLabel, 'completed', source, input, result, profileIdFromInput(input))
+    await logActionEvent(name, definition.auditLabel, 'completed', source, input, result, eventProfileId(name, input))
     return result
   } catch (error) {
-    await logActionEvent(name, definition.auditLabel, 'failed', source, input, {}, profileIdFromInput(input), error)
+    await logActionEvent(name, definition.auditLabel, 'failed', source, input, {}, eventProfileId(name, input), error)
     throw error
   }
 }
@@ -504,7 +536,7 @@ export async function confirmPendingAction(pendingActionId: string): Promise<{
       update pending_actions set status = 'confirmed', result = ${sql.json({ markdown } as any)}, resolved_at = now()
       where id = ${pendingActionId} and user_id = ${localUserId()}
     `
-    await logActionEvent(actionName, definition.auditLabel, 'confirmed', pending.source, input, result, profileIdFromInput(input), undefined, pendingActionId)
+    await logActionEvent(actionName, definition.auditLabel, 'confirmed', pending.source, input, result, eventProfileId(actionName, input), undefined, pendingActionId)
     return {
       markdown,
       result,
@@ -515,7 +547,7 @@ export async function confirmPendingAction(pendingActionId: string): Promise<{
       update pending_actions set status = 'failed', error = ${error instanceof Error ? error.message : 'Error'}, resolved_at = now()
       where id = ${pendingActionId} and user_id = ${localUserId()}
     `
-    await logActionEvent(actionName, definition.auditLabel, 'failed', pending.source, input, {}, profileIdFromInput(input), error, pendingActionId)
+    await logActionEvent(actionName, definition.auditLabel, 'failed', pending.source, input, {}, eventProfileId(actionName, input), error, pendingActionId)
     throw error
   }
 }
@@ -573,6 +605,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'savePreference') return 'Guardar preferencia'
   if (name === 'replaceMeal') return 'Reemplazar comida'
   if (name === 'applySimilarReplacements') return 'Aplicar similares'
+  if (name === 'deleteProfile') return 'Eliminar perfil'
   return 'Continuar'
 }
 
@@ -604,6 +637,11 @@ function profileIdFromInput(input: unknown): string | null {
   if (!input || typeof input !== 'object') return null
   const profileId = (input as Record<string, unknown>).profileId
   return typeof profileId === 'string' ? profileId : null
+}
+
+function eventProfileId(name: AppActionName, input: unknown): string | null {
+  if (name === 'deleteProfile') return null
+  return profileIdFromInput(input)
 }
 
 function actionResultSummary(name: AppActionName, result: unknown): string {

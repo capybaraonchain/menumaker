@@ -83,6 +83,7 @@ Mutation tools:
 - `unstar_recipe`
 - `save_profile_preference`
 - `apply_calorie_target_change`
+- `delete_profile`
 
 ## Confirmation Rules
 
@@ -117,6 +118,7 @@ Examples:
 - Saving "broccoli" as a profile dislike or ban requires explicit confirmation.
 - Regenerating the whole week requires confirmation and must preserve locked days and meals.
 - Changing calorie targets requires a calorie adjustment preview when possible. The confirmed mutation should apply the previewed plan and reject it if the menu changed after preview.
+- Deleting a profile requires explicit confirmation and exact profile-name echo. It must return an export snapshot when requested, clear dependent profile data, and avoid touching other profiles.
 
 ## Mutation Return Shape
 
@@ -130,6 +132,7 @@ Every mutation should return:
 - Next suggested action, if useful.
 - For calorie target changes: counts of portion resizes, ingredient rebalances, recipe replacements, preserved locks, weekly impact, daily warnings, and a Spanish explanation summary.
 - For regeneration: counts of recipe replacements and preserved locks, recipe titles changed, weekly impact, warnings, and whether the exact previewed plan was applied.
+- For profile deletion: deleted profile ID/name, remaining active profile ID if any, and an export snapshot with profile, menus, saved recipes, preferences, and counts when requested.
 
 Mutation tools should be idempotent where practical.
 

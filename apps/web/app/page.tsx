@@ -14,6 +14,7 @@ import {
   Save,
   Sparkles,
   Star,
+  Trash2,
   Unlock,
   UserRound,
   Utensils,
@@ -228,7 +229,7 @@ export default function App() {
         )}
         {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
         {tab === 'historial' && <HistoryScreen state={state} />}
-        {tab === 'perfil' && <ProfileScreen state={state} onSwitch={(id) => loadState(id)} onCreate={() => setCreatingProfile(true)} />}
+        {tab === 'perfil' && <ProfileScreen state={state} onSwitch={(id) => loadState(id)} onCreate={() => setCreatingProfile(true)} onAction={postAction} />}
       </section>
 
       <button className="chat-fab" onClick={() => setChatOpen(true)} aria-label="Abrir chat">
@@ -586,8 +587,11 @@ function HistoryScreen({ state }: { state: AppState }) {
   return <div className="simple-list">{state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · snapshot preservado</small></span></article>)}</div>
 }
 
-function ProfileScreen({ state, onSwitch, onCreate }: { state: AppState; onSwitch: (id: string) => void; onCreate: () => void }) {
+function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppState; onSwitch: (id: string) => void; onCreate: () => void; onAction: (payload: any) => Promise<any> }) {
   const profile = state.activeProfile!
+  const [deleteName, setDeleteName] = useState('')
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   return (
     <section className="profile-screen">
       <h2>Perfil</h2>
@@ -606,6 +610,35 @@ function ProfileScreen({ state, onSwitch, onCreate }: { state: AppState; onSwitc
         <p><strong>No me gusta:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
         <p><strong>Prohibidos:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
       </div>
+      <section className="danger-zone">
+        <div>
+          <h3>Zona de borrado</h3>
+          <p>Elimina este perfil, sus menús, preferencias y enlaces a recetas guardadas. La acción devuelve un snapshot de exportación y no toca otros perfiles.</p>
+        </div>
+        <label>Escribe {profile.name}<input value={deleteName} onChange={(event) => {
+          setDeleteName(event.target.value)
+          setDeleteError(null)
+        }} /></label>
+        {deleteError && <p className="error">{deleteError}</p>}
+        <button
+          className="danger-button"
+          disabled={deleteBusy || deleteName !== profile.name}
+          onClick={async () => {
+            setDeleteBusy(true)
+            setDeleteError(null)
+            try {
+              await onAction({ action: 'deleteProfile', profileId: profile.id, expectedName: deleteName, exportBeforeDelete: true })
+              setDeleteName('')
+            } catch (error) {
+              setDeleteError(error instanceof Error ? error.message : 'No se pudo eliminar el perfil.')
+            } finally {
+              setDeleteBusy(false)
+            }
+          }}
+        >
+          <Trash2 /> {deleteBusy ? 'Eliminando...' : 'Eliminar perfil'}
+        </button>
+      </section>
     </section>
   )
 }

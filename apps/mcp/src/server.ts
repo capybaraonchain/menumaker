@@ -51,6 +51,7 @@ const pendingActionNames = [
   'savePreference',
   'replaceMeal',
   'applySimilarReplacements',
+  'deleteProfile',
 ] as const
 
 function json(value: unknown) {
@@ -495,6 +496,24 @@ server.registerTool(
   async ({ profileId, confirmed, ...input }) => {
     requireConfirmation(confirmed, 'profile update')
     return json(await updateProfile(profileId, input))
+  },
+)
+
+server.registerTool(
+  'delete_profile',
+  {
+    description: 'Destructive mutation: delete one local profile, its menus, preferences, saved recipe links, and now-orphaned generated recipes. Returns an export snapshot when exportBeforeDelete=true. Requires confirmed=true and exact expectedName.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      expectedName: z.string().min(1),
+      exportBeforeDelete: z.boolean().default(true),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, expectedName, exportBeforeDelete, confirmed }) => {
+    requireConfirmation(confirmed, 'profile deletion')
+    return json(await executeAppAction('deleteProfile', { profileId, expectedName, exportBeforeDelete }, 'mcp'))
   },
 )
 

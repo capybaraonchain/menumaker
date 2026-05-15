@@ -281,6 +281,7 @@ Screens:
 - `Recetas`.
 - `Historial`.
 - `Perfil`.
+- Profile deletion/admin reset zone.
 
 Acceptance:
 
@@ -289,6 +290,7 @@ Acceptance:
 - First weekly menu generation is launched from onboarding.
 - `Semana` shows the current week and direct meal actions.
 - Meal detail shows recipe, ingredients, steps, macros, confidence, star, lock, and edit actions.
+- `Perfil` can delete the active profile only after exact-name confirmation and returns an export snapshot through the action result.
 - Generation progress and failure states are visible in the UI.
 
 ## Phase 8: Meal Editing, Locks, Stars, And History
@@ -360,6 +362,7 @@ Acceptance:
 - Proposal tools can suggest replacements or regeneration previews.
 - Regeneration previews are server-owned plans with exact candidate recipes, base menu hash, affected/preserved meal IDs, warnings, and Spanish confirmation copy.
 - Regeneration mutations can apply the previewed plan exactly and reject it if the menu changed before confirmation.
+- Destructive profile deletion is exposed as a confirmed MCP mutation with exact-name verification and optional export snapshot.
 - Mutation tools enforce confirmation expectations at the service boundary.
 - Skill file exists and matches the tool contract.
 

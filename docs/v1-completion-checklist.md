@@ -137,6 +137,7 @@ An item is complete only when the behavior works locally, not merely when files 
 
 - [x] `Semana` is the primary screen after onboarding.
 - [x] Selected profile is visible.
+- [x] Profile deletion exists behind exact-name confirmation and returns an export snapshot.
 - [x] Week range is visible.
 - [x] Daily calories/macros are visible.
 - [x] Weekly target progress is visible.

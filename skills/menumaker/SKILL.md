@@ -14,6 +14,7 @@ Use this skill when operating the local MenuMaker app through MCP.
 - Use read-only tools freely.
 - Use proposal tools before mutation tools.
 - Do not call mutation tools for broad or persistent changes without explicit user confirmation.
+- For profile deletion, require explicit confirmation plus exact profile-name echo, and request/export the snapshot unless the user declines it.
 - Preserve locked meals and locked days.
 - Use deterministic nutrition tools before making calorie or macro claims.
 - Mention confidence when nutrition is estimated, generic, or low-confidence.
@@ -72,3 +73,10 @@ For macro questions:
 1. Inspect profile and macro targets.
 2. Use nutrition snapshots or `analyze_recipe_nutrition`.
 3. Explain uncertainty if confidence is not deterministic.
+
+For profile deletion:
+
+1. Confirm the active profile ID and exact display name.
+2. Ask the user to confirm deletion by repeating the exact profile name.
+3. Call `delete_profile` with `confirmed=true`, `expectedName`, and `exportBeforeDelete=true` unless the user explicitly declines export.
+4. Tell the user which profile was deleted and whether another profile remains active.

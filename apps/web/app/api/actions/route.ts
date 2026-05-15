@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server'
 const legacyActionNames: Record<string, AppActionName> = {
   adjustCaloriesAndRegenerateWeek: 'applyCalorieTargetChange',
   applySimilarReplacements: 'applySimilarReplacements',
+  deleteProfile: 'deleteProfile',
   lockDay: 'lockDay',
   lockMeal: 'lockMeal',
   regenerateDay: 'regenerateDay',

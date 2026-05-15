@@ -132,6 +132,36 @@ export interface MenuHistoryItem {
   nutrition: NutritionTotals
 }
 
+export interface ProfileDeletionExport {
+  exportedAt: string
+  profile: ProfileRow
+  menus: WeeklyMenuView[]
+  savedRecipes: SavedRecipeView[]
+  preferences: Array<{
+    id: string
+    kind: string
+    value: string
+    scope: string
+    strength: string
+    createdAt: string
+  }>
+  counts: {
+    menus: number
+    days: number
+    meals: number
+    savedRecipes: number
+    preferences: number
+    generatedRecipesConsideredForCleanup: number
+  }
+}
+
+export interface ProfileDeletionResult {
+  deletedProfileId: string
+  deletedProfileName: string
+  remainingProfileId: string | null
+  export: ProfileDeletionExport | null
+}
+
 export interface ReplacementProposal {
   proposalId: string
   affectedMeals: string[]
@@ -380,6 +410,142 @@ export async function updateProfile(profileId: string, input: ProfileUpdateInput
   return getAppState(profileId)
 }
 
+export async function exportProfileData(profileId: string): Promise<ProfileDeletionExport> {
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  const sql = sqlClient()
+  const menuRows = await sql`
+    select id from weekly_menus
+    where profile_id = ${profileId} and user_id = ${localUserId()}
+    order by created_at asc
+  `
+  const menus: WeeklyMenuView[] = []
+  for (const row of menuRows) menus.push(await getWeeklyMenu(row.id))
+  const preferenceRows = await sql`
+    select id, kind, value, scope, strength, created_at
+    from profile_preferences
+    where profile_id = ${profileId} and user_id = ${localUserId()}
+    order by created_at asc
+  `
+  const recipeRows = await sql`
+    select distinct r.id
+    from recipes r
+    where r.user_id = ${localUserId()} and (
+      exists (
+        select 1 from weekly_menus wm
+        join day_plans dp on dp.weekly_menu_id = wm.id
+        join menu_meals mm on mm.day_plan_id = dp.id
+        where wm.profile_id = ${profileId} and mm.recipe_id = r.id
+      )
+      or exists (
+        select 1 from saved_recipes sr
+        where sr.profile_id = ${profileId} and sr.recipe_id = r.id
+      )
+    )
+  `
+  return {
+    exportedAt: new Date().toISOString(),
+    profile,
+    menus,
+    savedRecipes: await getSavedRecipes(profileId),
+    preferences: preferenceRows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      value: row.value,
+      scope: row.scope,
+      strength: row.strength,
+      createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
+    })),
+    counts: {
+      menus: menus.length,
+      days: menus.reduce((total, menu) => total + menu.days.length, 0),
+      meals: menus.reduce((total, menu) => total + menu.days.reduce((dayTotal, day) => dayTotal + day.meals.length, 0), 0),
+      savedRecipes: await countRows(sql`select count(*)::int as count from saved_recipes where profile_id = ${profileId} and user_id = ${localUserId()}`),
+      preferences: preferenceRows.length,
+      generatedRecipesConsideredForCleanup: recipeRows.length,
+    },
+  }
+}
+
+export async function deleteProfile(profileId: string, expectedName: string, exportBeforeDelete = true): Promise<ProfileDeletionResult> {
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  if (expectedName.trim() !== profile.name) {
+    throw new Error(`Para eliminar este perfil, escribe exactamente "${profile.name}".`)
+  }
+
+  const exportSnapshot = exportBeforeDelete ? await exportProfileData(profileId) : null
+  const sql = sqlClient()
+  const recipeRows = await sql<{ id: string }[]>`
+    select distinct r.id
+    from recipes r
+    where r.user_id = ${localUserId()} and (
+      exists (
+        select 1 from weekly_menus wm
+        join day_plans dp on dp.weekly_menu_id = wm.id
+        join menu_meals mm on mm.day_plan_id = dp.id
+        where wm.profile_id = ${profileId} and mm.recipe_id = r.id
+      )
+      or exists (
+        select 1 from saved_recipes sr
+        where sr.profile_id = ${profileId} and sr.recipe_id = r.id
+      )
+    )
+  `
+  const menuRows = await sql<{ id: string }[]>`
+    select id from weekly_menus
+    where profile_id = ${profileId} and user_id = ${localUserId()}
+  `
+
+  await sql.begin(async (tx) => {
+    for (const row of menuRows) {
+      await tx`
+        update generation_jobs set weekly_menu_id = null
+        where weekly_menu_id = ${row.id} and user_id = ${localUserId()}
+      `
+    }
+    await tx`
+      update generation_jobs set profile_id = null
+      where profile_id = ${profileId} and user_id = ${localUserId()}
+    `
+    await tx`
+      update pending_actions set profile_id = null
+      where profile_id = ${profileId} and user_id = ${localUserId()}
+    `
+    await tx`
+      update action_events set profile_id = null
+      where profile_id = ${profileId} and user_id = ${localUserId()}
+    `
+    await tx`delete from saved_recipes where profile_id = ${profileId} and user_id = ${localUserId()}`
+    await tx`delete from profile_preferences where profile_id = ${profileId} and user_id = ${localUserId()}`
+    await tx`delete from weekly_menus where profile_id = ${profileId} and user_id = ${localUserId()}`
+    await tx`delete from macro_targets where profile_id = ${profileId} and user_id = ${localUserId()}`
+    await tx`delete from profiles where id = ${profileId} and user_id = ${localUserId()}`
+    for (const row of recipeRows) {
+      await tx`
+        delete from nutrition_estimates
+        where user_id = ${localUserId()} and entity_type = 'recipe' and entity_id = ${row.id}
+          and not exists (select 1 from menu_meals where recipe_id = ${row.id})
+          and not exists (select 1 from saved_recipes where recipe_id = ${row.id})
+      `
+      await tx`
+        delete from recipes
+        where id = ${row.id} and user_id = ${localUserId()}
+          and not exists (select 1 from menu_meals where recipe_id = ${row.id})
+          and not exists (select 1 from saved_recipes where recipe_id = ${row.id})
+      `
+    }
+  })
+
+  const remainingProfile = (await listProfiles())[0] ?? null
+  return {
+    deletedProfileId: profileId,
+    deletedProfileName: profile.name,
+    remainingProfileId: remainingProfile?.id ?? null,
+    export: exportSnapshot,
+  }
+}
+
 export async function listProfiles(): Promise<ProfileRow[]> {
   const sql = sqlClient()
   const rows = await sql`
@@ -589,6 +755,11 @@ export async function getMenuHistory(profileId: string): Promise<MenuHistoryItem
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
     nutrition: row.nutrition_snapshot,
   }))
+}
+
+async function countRows(query: Promise<Array<{ count: number | string }>>): Promise<number> {
+  const [row] = await query
+  return Number(row?.count ?? 0)
 }
 
 export async function lockMeal(menuMealId: string, locked: boolean): Promise<MenuMealView> {

@@ -314,6 +314,25 @@ p {
   color: var(--ink);
 }
 
+.danger-button {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-weight: 800;
+  background: var(--danger);
+  color: white;
+}
+
+.danger-button svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.1;
+}
+
 .bottom-nav {
   position: fixed;
   left: 50%;
@@ -666,6 +685,26 @@ label {
   display: grid;
   gap: 10px;
   color: var(--muted);
+}
+
+.danger-zone {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(162, 58, 43, 0.3);
+  background: #fff1eb;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.danger-zone h3 {
+  color: var(--danger);
+  font-size: 1rem;
+}
+
+.danger-zone p {
+  color: #744137;
+  line-height: 1.4;
+  font-size: 0.9rem;
 }
 
 button[aria-label="Open Next.js Dev Tools"] {
