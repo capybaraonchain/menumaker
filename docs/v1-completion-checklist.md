@@ -207,10 +207,12 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Progress includes persisted recipe generation state in job logs.
 - [x] Progress includes persisted nutrition/finalizing state in job logs.
 - [x] Impossible targets failure is visible and actionable.
-- [x] Low nutrition confidence failure code is displayable from job state; dedicated remediation screen remains deferred.
-- [x] Ambiguous ingredient failure code is displayable from job state; dedicated remediation screen remains deferred.
-- [x] Banned-item conflict failure code is displayable from job state; dedicated remediation screen remains deferred.
-- [x] Generation-exhausted failure code is displayable from job state with retry; dedicated remediation screen remains deferred.
+- [x] Low nutrition confidence failure includes persisted remediation steps.
+- [x] Ambiguous ingredient failure includes persisted remediation steps.
+- [x] Banned-item conflict failure includes persisted remediation steps.
+- [x] Generation-exhausted failure includes retry and persisted remediation steps.
+- [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.
+- [x] Guided remediation forms remain deferred beyond the inline local v1 remediation panel.
 
 ## 13. In-App Chat
 

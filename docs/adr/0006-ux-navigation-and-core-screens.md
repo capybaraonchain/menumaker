@@ -167,7 +167,7 @@ Spanish UI copy should be used for Spanish profiles.
 
 V1 exposes these states from persisted `generation_jobs` rows. Semana should surface currently running or failed jobs, and Historial should show recent generation jobs alongside stored menus. This is not yet a streaming worker UI, but failures and progress must not remain database-only.
 
-Failure states should be visible and actionable:
+Failure states should be visible and actionable from persisted job metadata:
 
 - Impossible targets.
 - Low nutrition confidence.
@@ -175,9 +175,9 @@ Failure states should be visible and actionable:
 - Banned-item conflict.
 - Generation exhausted.
 
-The UI should explain what happened and offer the next reasonable action.
+The UI should explain what happened and offer the next reasonable action. Local v1 now stores deterministic remediation metadata on failed jobs and unresolved repair issues, so Semana and Historial can show specific next steps instead of a generic retry-only message.
 
-For failed generation jobs, the first safe action is `Reintentar`. Code-specific remediation screens can add more targeted actions later.
+For failed generation jobs, the first safe action is still `Reintentar`. Guided remediation forms can add editable ingredient mapping, preference relaxation, and target-adjustment flows later.
 
 ## Perfil Screen
 

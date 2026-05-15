@@ -200,7 +200,7 @@ The companion skill should instruct agents to:
 - Use `run_generation_job` to execute a queued weekly-generation job after confirmation.
 - Use `start_weekly_menu_generation` only when the user explicitly wants enqueue-and-run in one step.
 - Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
-- Use persisted `generationSummary` and `RepairRequest` / `RepairResult` telemetry from generation job results when explaining what changed or why a generation failed.
+- Use persisted `generationSummary`, `remediation`, `repairRemediation`, and `RepairRequest` / `RepairResult` telemetry from generation job results when explaining what changed, why a generation failed, and what the next safe action is.
 - Use `retry_generation_job` only for failed generation jobs and only after explicit confirmation.
 - Explain impossible targets by showing the calorie conflict between protein, minimum fat, and calorie target.
 - Preview calorie target changes with `preview_calorie_adjustment_plan` before mutation.

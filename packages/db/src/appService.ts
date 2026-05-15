@@ -41,6 +41,12 @@ import {
 } from './caloriePlanner'
 import { closeDb, sqlClient } from './client'
 import { loadDotEnv, localUserId } from './env'
+import {
+  buildGenerationRemediationPlan,
+  buildRepairRemediationPlans,
+  classifyGenerationFailure,
+  type GenerationRemediationPlan,
+} from './remediation'
 
 export interface AppState {
   provider?: unknown
@@ -153,6 +159,7 @@ export interface GenerationJobView {
   failureCode: string | null
   logs: string[]
   result: Record<string, unknown>
+  remediation: GenerationRemediationPlan | null
   error: string | null
   retryCount: number
   createdAt: string
@@ -822,6 +829,12 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
     weekRecipes = await buildRecipesForWeek(profile, input.target)
   } catch (error) {
     const failureLogs = ['En cola', 'Construyendo semana', 'Generando esqueleto semanal', 'Generando candidatos con LLM', 'Fallo de generación']
+    const failureCode = classifyGenerationFailure(error)
+    const remediation = buildGenerationRemediationPlan({
+      code: failureCode,
+      error: error instanceof Error ? error.message : String(error),
+      target: input.target,
+    })
     const generationSummary = await summarizeGenerationCached({
       locale: profile.locale,
       profileName: profile.name,
@@ -834,16 +847,17 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
       fallbackSlots: [],
       repair: null,
       logs: failureLogs,
-      failureCode: 'generation_exhausted',
+      failureCode,
       error: error instanceof Error ? error.message : String(error),
     })
     await sql`
       update generation_jobs set status = 'failed',
-        failure_code = 'generation_exhausted',
+        failure_code = ${failureCode},
         logs = ${sql.json(failureLogs as any)},
         result = coalesce(result, '{}'::jsonb) || ${sql.json({
           jobInput: input,
           generationSummary,
+          remediation,
         } as any)}::jsonb,
         error = ${error instanceof Error ? error.message : String(error)},
         updated_at = now()
@@ -889,6 +903,7 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   }
 
   const weeklyNutrition = sumNutrition(dayNutrition)
+  const repairRemediation = buildRepairRemediationPlans(weekRecipes.repair)
   const completedLogs = [
     'En cola',
     'Construyendo semana',
@@ -917,7 +932,10 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   await sql`
     update weekly_menus
     set nutrition_snapshot = ${sql.json(weeklyNutrition as any)},
-      generation_settings = generation_settings || ${sql.json({ generationSummary } as any)}::jsonb
+      generation_settings = generation_settings || ${sql.json({
+        generationSummary,
+        repairRemediation,
+      } as any)}::jsonb
     where id = ${menu.id}
   `
   await sql`
@@ -932,6 +950,7 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
         repair: weekRecipes.repair,
         trace: weekRecipes.trace,
         generationSummary,
+        repairRemediation,
       } as any)}, updated_at = now()
     where id = ${jobId} and user_id = ${localUserId()}
   `
@@ -2804,6 +2823,7 @@ function profileFromRow(row: any): ProfileRow {
 }
 
 function generationJobFromRow(row: any): GenerationJobView {
+  const result = row.result && typeof row.result === 'object' && !Array.isArray(row.result) ? row.result : {}
   return {
     id: row.id,
     profileId: row.profile_id ?? null,
@@ -2812,12 +2832,23 @@ function generationJobFromRow(row: any): GenerationJobView {
     kind: row.kind,
     failureCode: row.failure_code ?? null,
     logs: Array.isArray(row.logs) ? row.logs.map(String) : [],
-    result: row.result && typeof row.result === 'object' && !Array.isArray(row.result) ? row.result : {},
+    result,
+    remediation: generationRemediationFromResult(result),
     error: row.error ?? null,
     retryCount: Number(row.retry_count ?? 0),
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
     updatedAt: row.updated_at?.toISOString?.() ?? String(row.updated_at),
   }
+}
+
+function generationRemediationFromResult(result: Record<string, unknown>): GenerationRemediationPlan | null {
+  const value = result.remediation
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as GenerationRemediationPlan
+  const repairValue = result.repairRemediation
+  if (Array.isArray(repairValue) && repairValue.length > 0 && repairValue[0] && typeof repairValue[0] === 'object') {
+    return repairValue[0] as GenerationRemediationPlan
+  }
+  return null
 }
 
 function targetFromRow(row: any): MacroTargets {

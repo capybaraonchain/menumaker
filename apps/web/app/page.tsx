@@ -96,10 +96,20 @@ type GenerationJob = {
   failureCode: string | null
   logs: string[]
   result: Record<string, any>
+  remediation: RemediationPlan | null
   error: string | null
   retryCount: number
   createdAt: string
   updatedAt: string
+}
+type RemediationPlan = {
+  code: string
+  severity: 'info' | 'warning' | 'blocking'
+  title: string
+  summary: string
+  steps: string[]
+  actions: Array<{ kind: string; label: string; requiresConfirmation: boolean }>
+  context?: Record<string, any>
 }
 type ReplacementProposal = {
   proposalId: string
@@ -558,6 +568,7 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
   const skeletonTrace = settings.weekSkeletonTrace && typeof settings.weekSkeletonTrace === 'object' ? settings.weekSkeletonTrace as Record<string, any> : null
   const repair = settings.repair && typeof settings.repair === 'object' ? settings.repair as { attempted?: boolean; actions?: unknown[]; repaired?: boolean } : null
   const generationSummary = generationSummaryText(settings.generationSummary)
+  const repairRemediation = repairRemediationPlans(settings.repairRemediation)
   const slotTraces = Object.values(trace?.slots ?? {})
   const cacheHits = slotTraces.filter((item) => item?.cacheHit).length
   const source = String(settings.recipeSource ?? '')
@@ -570,10 +581,13 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
       repairActions > 0 ? `${repairActions} reparación(es) de selección` : null,
     ].filter(Boolean).join('; ')
     return (
-      <section className="generation-notice warning">
-        <strong>Fallback usado</strong>
-        <span>{generationSummary ?? `${details}.`}</span>
-      </section>
+      <div className="notice-stack">
+        <section className="generation-notice warning">
+          <strong>Fallback usado</strong>
+          <span>{generationSummary ?? `${details}.`}</span>
+        </section>
+        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}
+      </div>
     )
   }
   if (source === 'llm' || cacheHits > 0 || skeletonTrace?.providerSource === 'llm') {
@@ -583,16 +597,37 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
       repairActions > 0 ? `${repairActions} reparación(es) de selección aplicadas.` : null,
     ].filter(Boolean).join(' ')
     return (
-      <section className="generation-notice">
-        <strong>Plan LLM validado</strong>
-        <span>{generationSummary ?? details}</span>
-      </section>
+      <div className="notice-stack">
+        <section className="generation-notice">
+          <strong>Plan LLM validado</strong>
+          <span>{generationSummary ?? details}</span>
+        </section>
+        {repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}
+      </div>
     )
+  }
+  if (repairRemediation.length > 0) {
+    return <div className="notice-stack">{repairRemediation.map((item) => <RemediationNotice key={`${item.code}-${item.title}`} plan={item} />)}</div>
   }
   return (
     <section className="generation-notice legacy">
       <strong>Sin trazabilidad de generación</strong>
       <span>Este menú fue creado antes de registrar fuente, fallback y caché.</span>
+    </section>
+  )
+}
+
+function repairRemediationPlans(value: unknown): RemediationPlan[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is RemediationPlan => Boolean(item) && typeof item === 'object' && typeof item.title === 'string')
+}
+
+function RemediationNotice({ plan }: { plan: RemediationPlan }) {
+  return (
+    <section className={`generation-notice remediation ${plan.severity}`}>
+      <strong>{plan.title}</strong>
+      <span>{plan.summary}</span>
+      {plan.steps.length > 0 && <span>Qué hacer: {plan.steps.slice(0, 2).join(' ')}</span>}
     </section>
   )
 }
@@ -626,6 +661,7 @@ function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { j
               <small>{jobFailureText(job)}</small>
               {generationSummaryText(job.result?.generationSummary) && <small>{generationSummaryText(job.result.generationSummary)}</small>}
               {job.logs.length > 0 && <small>Último paso: {job.logs[job.logs.length - 1]}</small>}
+              {job.remediation && <JobRemediation plan={job.remediation} compact={compact} />}
             </div>
             {job.status === 'failed' && (
               <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'retryGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
@@ -636,6 +672,27 @@ function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { j
         ))}
       </div>
     </section>
+  )
+}
+
+function JobRemediation({ plan, compact }: { plan: RemediationPlan; compact: boolean }) {
+  return (
+    <div className={`job-remediation ${plan.severity}`}>
+      <strong>{plan.title}</strong>
+      <small>{plan.summary}</small>
+      {!compact && (
+        <>
+          <ul>
+            {plan.steps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
+          </ul>
+          {plan.actions.length > 0 && (
+            <div className="remediation-actions">
+              {plan.actions.slice(0, 3).map((action) => <span key={`${action.kind}-${action.label}`}>{action.label}</span>)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 
@@ -688,6 +745,7 @@ function HistoryScreen({ state }: { state: AppState }) {
               <span>
                 <strong>{jobKindLabel(job.kind)} · {jobStatusLabel(job.status)}</strong>
                 <small>{formatDateTime(job.updatedAt)} · {job.failureCode ? jobFailureLabel(job.failureCode) : `${job.logs.length} paso(s) registrados`}</small>
+                {job.remediation && <small>{job.remediation.title}: {job.remediation.summary}</small>}
               </span>
             </article>
           ))}

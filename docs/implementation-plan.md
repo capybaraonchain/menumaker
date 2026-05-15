@@ -210,6 +210,8 @@ Implement:
 - A reusable weekly-generation runner that claims a queued job and produces the menu.
 - Job state transitions.
 - Job logs.
+- Code-specific remediation metadata persisted in `generation_jobs.result.remediation` for failed jobs.
+- Repair-issue remediation metadata persisted in menu/job generation settings when bounded repair cannot fully resolve the week.
 - Retry limit.
 - Failure states.
 - AI cache keyed by input hash, model, and schema version.
@@ -234,6 +236,7 @@ Acceptance:
 - Menu generation metadata records recipe source, skeleton source, fallback slots, fallback policy, repair trace, and AI-cache hits.
 - Chat responses can report cache hits without exposing provider tokens.
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
+- Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 
