@@ -4,6 +4,7 @@ import {
   applySimilarIngredientReplacements,
   getAppState,
   getCurrentMenu,
+  getWeeklyMenu,
   lockDay,
   lockMeal,
   regenerateDay,
@@ -14,6 +15,7 @@ import {
   starRecipe,
   suggestMealReplacements,
   unstarRecipe,
+  type WeeklyMenuView,
 } from './appService'
 import { sqlClient } from './client'
 import { localUserId } from './env'
@@ -177,10 +179,18 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     requiresConfirmation: true,
     auditLabel: 'mutation.calorie_target_change',
     confirmationCopyEs: calorieTargetConfirmation,
-    successCopyEs: (input) => `Listo. Ajusté el objetivo a **${input.calories} kcal/día** y regeneré la semana usando el proceso real de creación de menús, respetando los elementos bloqueados.`,
+    successCopyEs: (input, result) => [
+      `Listo. Ajusté el objetivo a **${input.calories} kcal/día** y regeneré la semana usando el proceso real de creación de menús, respetando los elementos bloqueados.`,
+      resultChangeSummary(result),
+    ].filter(Boolean).join('\n\n'),
     async execute(input) {
-      await adjustCaloriesAndRegenerateWeek(input.profileId, input.calories)
-      return appStateResult(input.profileId)
+      const before = await getCurrentMenu(input.profileId)
+      const adjustedMenu = await adjustCaloriesAndRegenerateWeek(input.profileId, input.calories)
+      return {
+        state: await appStateResult(input.profileId),
+        menu: adjustedMenu,
+        changeSummary: summarizeMenuChanges(before, adjustedMenu),
+      }
     },
   },
   regenerateWeek: {
@@ -189,10 +199,15 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     requiresConfirmation: true,
     auditLabel: 'mutation.regenerate_week',
     confirmationCopyEs: () => 'Se regenerará la semana completa respetando días y comidas bloqueadas. ¿Continuar?',
-    successCopyEs: () => 'Listo. Regeneré la semana respetando los días y comidas bloqueadas.',
+    successCopyEs: (_, result) => ['Listo. Regeneré la semana respetando los días y comidas bloqueadas.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      await regenerateWeek(input.menuId)
-      return appStateResult(input.profileId)
+      const before = await getWeeklyMenu(input.menuId)
+      const menu = await regenerateWeek(input.menuId)
+      return {
+        state: await appStateResult(input.profileId),
+        menu,
+        changeSummary: summarizeMenuChanges(before, menu),
+      }
     },
   },
   regenerateDay: {
@@ -201,10 +216,15 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     requiresConfirmation: true,
     auditLabel: 'mutation.regenerate_day',
     confirmationCopyEs: () => 'Se regenerarán las comidas no bloqueadas de este día. ¿Continuar?',
-    successCopyEs: () => 'Listo. Regeneré el día respetando las comidas bloqueadas.',
+    successCopyEs: (_, result) => ['Listo. Regeneré el día respetando las comidas bloqueadas.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      await regenerateDay(input.dayPlanId)
-      return appStateResult(input.profileId)
+      const before = input.profileId ? await getCurrentMenu(input.profileId) : null
+      const menu = await regenerateDay(input.dayPlanId)
+      return {
+        state: await appStateResult(input.profileId),
+        menu,
+        changeSummary: summarizeMenuChanges(before, menu),
+      }
     },
   },
   regenerateMeal: {
@@ -213,10 +233,15 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     requiresConfirmation: true,
     auditLabel: 'mutation.regenerate_meal',
     confirmationCopyEs: () => 'Se reemplazará esta comida si no está bloqueada. ¿Continuar?',
-    successCopyEs: () => 'Listo. Regeneré la comida seleccionada.',
+    successCopyEs: (_, result) => ['Listo. Regeneré la comida seleccionada.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      await regenerateMeal(input.menuMealId)
-      return appStateResult(input.profileId)
+      const before = input.profileId ? await getCurrentMenu(input.profileId) : null
+      const menu = await regenerateMeal(input.menuMealId)
+      return {
+        state: await appStateResult(input.profileId),
+        menu,
+        changeSummary: summarizeMenuChanges(before, menu),
+      }
     },
   },
   lockDay: {
@@ -532,6 +557,79 @@ function actionResultSummary(name: AppActionName, result: unknown): string {
     return `Encontré ${Array.isArray(options) ? options.length : 0} opciones de reemplazo.`
   }
   return 'Listo.'
+}
+
+function resultChangeSummary(result: unknown): string {
+  if (!result || typeof result !== 'object') return ''
+  const changeSummary = (result as { changeSummary?: unknown }).changeSummary
+  return typeof changeSummary === 'string' ? changeSummary : ''
+}
+
+function summarizeMenuChanges(before: WeeklyMenuView | null, after: WeeklyMenuView | null): string {
+  if (!before || !after) return ''
+  const beforeMeals = new Map<string, WeeklyMenuView['days'][number]['meals'][number]>()
+  for (const day of before.days) {
+    for (const meal of day.meals) beforeMeals.set(`${day.dayIndex}:${meal.slot}`, meal)
+  }
+
+  const changedTitles: string[] = []
+  const portionChanges: Array<{ label: string; title: string; deltaCalories: number }> = []
+  let unchanged = 0
+
+  for (const day of after.days) {
+    for (const meal of day.meals) {
+      const previous = beforeMeals.get(`${day.dayIndex}:${meal.slot}`)
+      if (!previous) continue
+      const deltaCalories = round1(meal.nutrition.calories - previous.nutrition.calories)
+      if (previous.recipe.title !== meal.recipe.title) {
+        changedTitles.push(`${dayName(day.dayIndex)} ${slotLabel(meal.slot)}: ${previous.recipe.title} -> ${meal.recipe.title}`)
+      } else if (Math.abs(deltaCalories) >= 1) {
+        portionChanges.push({ label: `${dayName(day.dayIndex)} ${slotLabel(meal.slot)}`, title: meal.recipe.title, deltaCalories })
+      } else {
+        unchanged += 1
+      }
+    }
+  }
+
+  const nutritionDelta = {
+    calories: round1(after.nutrition.calories - before.nutrition.calories),
+    proteinG: round1(after.nutrition.proteinG - before.nutrition.proteinG),
+    carbsG: round1(after.nutrition.carbsG - before.nutrition.carbsG),
+    fatG: round1(after.nutrition.fatG - before.nutrition.fatG),
+  }
+  const lines = [
+    `**Resumen de cambios:** ${changedTitles.length > 0 ? `cambié ${changedTitles.length} receta(s)` : 'no cambié nombres de recetas'}; ${portionChanges.length} comida(s) cambiaron de porción${unchanged ? ` y ${unchanged} quedaron igual` : ''}.`,
+    `**Impacto semanal:** ${formatSigned(nutritionDelta.calories)} kcal, ${formatSigned(nutritionDelta.proteinG)} g proteína, ${formatSigned(nutritionDelta.carbsG)} g carbos, ${formatSigned(nutritionDelta.fatG)} g grasa.`,
+  ]
+
+  const biggestPortionChanges = [...portionChanges].sort((left, right) => Math.abs(right.deltaCalories) - Math.abs(left.deltaCalories)).slice(0, 4)
+  if (changedTitles.length > 0) {
+    lines.push(`**Recetas reemplazadas:**\n${changedTitles.slice(0, 6).map((item) => `- ${item}`).join('\n')}`)
+  }
+  if (biggestPortionChanges.length > 0) {
+    lines.push(`**Mayores ajustes de porción:**\n${biggestPortionChanges.map((item) => `- ${item.label}: ${item.title} (${formatSigned(item.deltaCalories)} kcal)`).join('\n')}`)
+  }
+  return lines.join('\n\n')
+}
+
+function dayName(dayIndex: number): string {
+  return ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'][dayIndex] ?? `Día ${dayIndex + 1}`
+}
+
+function slotLabel(slot: string): string {
+  if (slot === 'breakfast') return 'desayuno'
+  if (slot === 'lunch') return 'comida'
+  if (slot === 'dinner') return 'cena'
+  if (slot === 'snack') return 'snack'
+  return slot
+}
+
+function formatSigned(value: number): string {
+  return `${value > 0 ? '+' : ''}${round1(value)}`
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10
 }
 
 async function calorieTargetConfirmation(input: AppActionInput<'proposeCalorieTargetChange'>): Promise<string> {
