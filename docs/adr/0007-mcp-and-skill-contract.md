@@ -192,6 +192,8 @@ The companion skill should instruct agents to:
 - Use deterministic nutrition analysis before macro claims.
 - Ask for confirmation before profile-wide or week-wide changes.
 - Treat generated menus and regenerations as async jobs.
+- Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
+- Use `retry_generation_job` only for failed generation jobs and only after explicit confirmation.
 - Explain impossible targets by showing the calorie conflict between protein, minimum fat, and calorie target.
 - Preview calorie target changes with `preview_calorie_adjustment_plan` before mutation.
 - Explain whether a calorie adjustment changed portions, rebalanced ingredients, or replaced recipes.

@@ -165,6 +165,8 @@ Generation should have visible progress states:
 
 Spanish UI copy should be used for Spanish profiles.
 
+V1 exposes these states from persisted `generation_jobs` rows. Semana should surface currently running or failed jobs, and Historial should show recent generation jobs alongside stored menus. This is not yet a streaming worker UI, but failures and progress must not remain database-only.
+
 Failure states should be visible and actionable:
 
 - Impossible targets.
@@ -174,6 +176,8 @@ Failure states should be visible and actionable:
 - Generation exhausted.
 
 The UI should explain what happened and offer the next reasonable action.
+
+For failed generation jobs, the first safe action is `Reintentar`. Code-specific remediation screens can add more targeted actions later.
 
 ## Perfil Screen
 

@@ -176,6 +176,82 @@ p {
   font-size: 0.82rem;
 }
 
+.job-panel {
+  border: 1px solid rgba(162, 58, 43, 0.24);
+  background: #fff8f3;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.job-panel header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.job-panel header > span {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #ffe2d5;
+  color: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.job-panel header svg,
+.job-row svg,
+.job-history svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.1;
+}
+
+.job-panel header div,
+.job-list,
+.history-screen {
+  display: grid;
+  gap: 8px;
+}
+
+.job-panel small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.job-row.failed,
+.job-history.failed {
+  border-color: rgba(162, 58, 43, 0.26);
+}
+
+.job-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.job-status {
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .day-list,
 .meal-list,
 .simple-list,

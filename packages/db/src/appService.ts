@@ -43,6 +43,7 @@ export interface AppState {
   currentMenu: WeeklyMenuView | null
   savedRecipes: SavedRecipeView[]
   history: MenuHistoryItem[]
+  generationJobs: GenerationJobView[]
 }
 
 export interface ProfileRow {
@@ -135,6 +136,27 @@ export interface MenuHistoryItem {
   weekStart: string
   createdAt: string
   nutrition: NutritionTotals
+}
+
+export interface GenerationJobView {
+  id: string
+  profileId: string | null
+  weeklyMenuId: string | null
+  status: 'queued' | 'running' | 'completed' | 'failed' | string
+  kind: string
+  failureCode: string | null
+  logs: string[]
+  result: Record<string, unknown>
+  error: string | null
+  retryCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RetryGenerationJobResult {
+  retriedJobId: string
+  retryOfKind: string
+  menu: WeeklyMenuView
 }
 
 export interface ProfileDeletionExport {
@@ -372,6 +394,7 @@ export async function getAppState(profileId?: string): Promise<AppState> {
     currentMenu: activeProfile ? await getCurrentMenu(activeProfile.id) : null,
     savedRecipes: activeProfile ? await getSavedRecipes(activeProfile.id) : [],
     history: activeProfile ? await getMenuHistory(activeProfile.id) : [],
+    generationJobs: activeProfile ? await getGenerationJobs(activeProfile.id) : [],
   }
 }
 
@@ -805,6 +828,47 @@ export async function getMenuHistory(profileId: string): Promise<MenuHistoryItem
     createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
     nutrition: row.nutrition_snapshot,
   }))
+}
+
+export async function getGenerationJobs(profileId: string, limit = 12): Promise<GenerationJobView[]> {
+  const sql = sqlClient()
+  const rows = await sql`
+    select id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    from generation_jobs
+    where user_id = ${localUserId()} and profile_id = ${profileId}
+    order by updated_at desc, created_at desc
+    limit ${Math.max(1, Math.min(50, Math.round(limit)))}
+  `
+  return rows.map(generationJobFromRow)
+}
+
+export async function retryGenerationJob(jobId: string): Promise<RetryGenerationJobResult> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select id, profile_id, status, kind
+    from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (!job) throw new Error('Trabajo de generación no encontrado.')
+  if (job.status !== 'failed') throw new Error('Solo se pueden reintentar trabajos fallidos.')
+  if (!job.profile_id) throw new Error('Este trabajo ya no tiene un perfil asociado.')
+  const profile = (await listProfiles()).find((item) => item.id === job.profile_id)
+  if (!profile) throw new Error('Perfil no encontrado para reintentar la generación.')
+  if (!profile.latestTarget) throw new Error('El perfil no tiene objetivos de macros para reintentar la generación.')
+
+  await sql`
+    update generation_jobs
+    set retry_count = retry_count + 1,
+      result = coalesce(result, '{}'::jsonb) || ${sql.json({ retriedAt: new Date().toISOString() } as any)}::jsonb,
+      updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  const menu = await createWeeklyMenu(profile.id, undefined, profile.latestTarget, `retry_${String(job.kind).slice(0, 48)}`)
+  return {
+    retriedJobId: jobId,
+    retryOfKind: String(job.kind),
+    menu,
+  }
 }
 
 async function countRows(query: Promise<Array<{ count: number | string }>>): Promise<number> {
@@ -2343,6 +2407,23 @@ function profileFromRow(row: any): ProfileRow {
     dislikes: row.dislikes ?? [],
     bannedFoods: row.banned_foods ?? [],
     latestTarget,
+  }
+}
+
+function generationJobFromRow(row: any): GenerationJobView {
+  return {
+    id: row.id,
+    profileId: row.profile_id ?? null,
+    weeklyMenuId: row.weekly_menu_id ?? null,
+    status: row.status,
+    kind: row.kind,
+    failureCode: row.failure_code ?? null,
+    logs: Array.isArray(row.logs) ? row.logs.map(String) : [],
+    result: row.result && typeof row.result === 'object' && !Array.isArray(row.result) ? row.result : {},
+    error: row.error ?? null,
+    retryCount: Number(row.retry_count ?? 0),
+    createdAt: row.created_at?.toISOString?.() ?? String(row.created_at),
+    updatedAt: row.updated_at?.toISOString?.() ?? String(row.updated_at),
   }
 }
 

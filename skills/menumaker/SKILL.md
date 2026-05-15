@@ -77,6 +77,13 @@ For macro questions:
 2. Use nutrition snapshots or `analyze_recipe_nutrition`.
 3. Explain uncertainty if confidence is not deterministic.
 
+For generation failures or progress:
+
+1. Call `get_generation_jobs` for the active profile.
+2. Explain the persisted status, last log step, failure code, retry count, and error in Spanish for Spanish profiles.
+3. Do not invent hidden progress if the job row has not changed.
+4. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
+
 For profile deletion:
 
 1. Confirm the active profile ID and exact display name.

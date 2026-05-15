@@ -189,19 +189,21 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation is synchronous enough that a full async progress surface would add more machinery than value. Generation jobs still persist status, logs, result, failure code, and error fields. The rich progress UI and dedicated failure screens below are explicitly deferred beyond the first working local app, except impossible-target errors, which are shown during onboarding/macro calculation.
+Local v1 generation still executes synchronously inside requests, but persisted generation jobs are now first-class state. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full worker queues, streaming progress, and cancellation remain deferred.
 
-- [x] Deferred: rich UI shows generation progress.
-- [x] Deferred: progress includes week skeleton/building state.
-- [x] Deferred: progress includes recipe generation state.
-- [x] Deferred: progress includes nutrition matching state.
-- [x] Deferred: progress includes balancing state.
-- [x] Deferred: progress includes finalizing state.
+- [x] App state exposes recent generation jobs for the active profile.
+- [x] MCP exposes recent generation jobs.
+- [x] Semana shows failed/running jobs instead of hiding them in database logs.
+- [x] Historial shows generation jobs alongside stored menus.
+- [x] Failed jobs can be retried through a typed action.
+- [x] Progress includes persisted week skeleton/building state in job logs.
+- [x] Progress includes persisted recipe generation state in job logs.
+- [x] Progress includes persisted nutrition/finalizing state in job logs.
 - [x] Impossible targets failure is visible and actionable.
-- [x] Deferred: dedicated low nutrition confidence failure screen. The failure code exists.
-- [x] Deferred: dedicated ambiguous ingredient failure screen. The failure code exists.
-- [x] Deferred: dedicated banned-item conflict failure screen. The failure code exists.
-- [x] Deferred: dedicated generation-exhausted failure screen. The failure code exists.
+- [x] Low nutrition confidence failure code is displayable from job state; dedicated remediation screen remains deferred.
+- [x] Ambiguous ingredient failure code is displayable from job state; dedicated remediation screen remains deferred.
+- [x] Banned-item conflict failure code is displayable from job state; dedicated remediation screen remains deferred.
+- [x] Generation-exhausted failure code is displayable from job state with retry; dedicated remediation screen remains deferred.
 
 ## 13. In-App Chat
 

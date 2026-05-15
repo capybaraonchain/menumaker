@@ -15,6 +15,7 @@ import {
   executeAppAction,
   getAppState,
   getCurrentMenu,
+  getGenerationJobs,
   getMenuHistory,
   getRecipe,
   getSavedRecipes,
@@ -52,6 +53,7 @@ const pendingActionNames = [
   'replaceMeal',
   'applySimilarReplacements',
   'deleteProfile',
+  'retryGenerationJob',
 ] as const
 
 function json(value: unknown) {
@@ -236,6 +238,29 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async ({ profileId }) => json(await getMenuHistory(profileId)),
+)
+
+server.registerTool(
+  'get_generation_jobs',
+  {
+    description: 'Read-only: list recent generation jobs for one profile, including logs, failure codes, retry count, and result metadata.',
+    inputSchema: { profileId: z.string().uuid(), limit: z.number().int().min(1).max(50).default(12) },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ profileId, limit }) => json(await getGenerationJobs(profileId, limit)),
+)
+
+server.registerTool(
+  'retry_generation_job',
+  {
+    description: 'Mutation: retry a failed weekly generation job through the shared app action registry. Creates a new stored weekly menu if the retry succeeds. Requires confirmed=true.',
+    inputSchema: { profileId: z.string().uuid(), jobId: z.string().uuid(), confirmed: z.boolean() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, jobId, confirmed }) => {
+    requireConfirmation(confirmed, 'retry generation job')
+    return json(await executeAppAction('retryGenerationJob', { profileId, jobId }, 'mcp'))
+  },
 )
 
 server.registerTool(

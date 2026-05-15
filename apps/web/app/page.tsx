@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  AlertTriangle,
   Apple,
   Archive,
   Bot,
@@ -8,6 +9,7 @@ import {
   Check,
   ChevronRight,
   History,
+  LoaderCircle,
   Lock,
   MessageCircle,
   RefreshCw,
@@ -82,7 +84,22 @@ type AppState = {
   }
   savedRecipes: Array<{ savedRecipeId: string; recipe: Recipe }>
   history: Array<{ id: string; weekStart: string; createdAt: string; nutrition: Nutrition }>
+  generationJobs: GenerationJob[]
   provider?: any
+}
+type GenerationJob = {
+  id: string
+  profileId: string | null
+  weeklyMenuId: string | null
+  status: string
+  kind: string
+  failureCode: string | null
+  logs: string[]
+  result: Record<string, any>
+  error: string | null
+  retryCount: number
+  createdAt: string
+  updatedAt: string
 }
 type ReplacementProposal = {
   proposalId: string
@@ -471,7 +488,14 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
 
 function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state: AppState; busy: string | null; onSelectMeal: (meal: Meal) => void; onEditMeal: (meal: Meal) => void; onAction: (payload: any) => Promise<any> }) {
   const menu = state.currentMenu
-  if (!menu) return <EmptyState title="Sin menú" body="Genera una semana desde el perfil." />
+  if (!menu) {
+    return (
+      <div className="week-screen">
+        <GenerationJobsPanel jobs={state.generationJobs} profileId={state.activeProfile?.id} onAction={onAction} compact={false} />
+        <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
+      </div>
+    )
+  }
   return (
     <div className="week-screen">
       <section className="summary-band">
@@ -488,6 +512,7 @@ function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state
         <span>Confianza {menu.target.confidence}</span>
       </section>
       <GenerationNotice menu={menu} />
+      <GenerationJobsPanel jobs={state.generationJobs} profileId={state.activeProfile?.id} onAction={onAction} compact />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -566,6 +591,41 @@ function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']>
   )
 }
 
+function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { jobs: GenerationJob[]; profileId?: string; onAction: (payload: any) => Promise<any>; compact?: boolean }) {
+  const visibleJobs = jobs
+    .filter((job) => job.status === 'failed' || job.status === 'running' || job.status === 'queued')
+    .slice(0, compact ? 2 : 6)
+  if (visibleJobs.length === 0) return null
+  return (
+    <section className="job-panel">
+      <header>
+        <span>{visibleJobs.some((job) => job.status === 'failed') ? <AlertTriangle /> : <LoaderCircle />}</span>
+        <div>
+          <strong>{visibleJobs.some((job) => job.status === 'failed') ? 'Generación necesita atención' : 'Generación en curso'}</strong>
+          <small>Estado persistido del trabajo, no un mensaje genérico.</small>
+        </div>
+      </header>
+      <div className="job-list">
+        {visibleJobs.map((job) => (
+          <article key={job.id} className={`job-row ${job.status}`}>
+            <div>
+              <span className="job-status">{jobStatusLabel(job.status)}</span>
+              <strong>{jobKindLabel(job.kind)}</strong>
+              <small>{jobFailureText(job)}</small>
+              {job.logs.length > 0 && <small>Último paso: {job.logs[job.logs.length - 1]}</small>}
+            </div>
+            {job.status === 'failed' && (
+              <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'retryGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
+                <RefreshCw /> Reintentar
+              </button>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal; profileId: string; onClose: () => void; onAction: (payload: any) => Promise<any>; onEdit: () => void }) {
   return (
     <Modal title={meal.recipe.title} onClose={onClose}>
@@ -597,8 +657,31 @@ function RecipesScreen({ state, onAction }: { state: AppState; onAction: (payloa
 }
 
 function HistoryScreen({ state }: { state: AppState }) {
-  if (state.history.length === 0) return <EmptyState title="Sin historial" body="Los menús generados aparecerán aquí con sus snapshots." />
-  return <div className="simple-list">{state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · snapshot preservado</small></span></article>)}</div>
+  if (state.history.length === 0 && state.generationJobs.length === 0) return <EmptyState title="Sin historial" body="Los menús y trabajos de generación aparecerán aquí con sus snapshots." />
+  return (
+    <div className="history-screen">
+      {state.history.length > 0 && (
+        <section className="simple-list">
+          <h2>Menús guardados</h2>
+          {state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · snapshot preservado</small></span></article>)}
+        </section>
+      )}
+      {state.generationJobs.length > 0 && (
+        <section className="simple-list">
+          <h2>Trabajos de generación</h2>
+          {state.generationJobs.map((job) => (
+            <article key={job.id} className={`history-row job-history ${job.status}`}>
+              {job.status === 'failed' ? <AlertTriangle /> : job.status === 'completed' ? <Check /> : <LoaderCircle />}
+              <span>
+                <strong>{jobKindLabel(job.kind)} · {jobStatusLabel(job.status)}</strong>
+                <small>{formatDateTime(job.updatedAt)} · {job.failureCode ? jobFailureLabel(job.failureCode) : `${job.logs.length} paso(s) registrados`}</small>
+              </span>
+            </article>
+          ))}
+        </section>
+      )}
+    </div>
+  )
 }
 
 function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppState; onSwitch: (id: string) => void; onCreate: () => void; onAction: (payload: any) => Promise<any> }) {
@@ -757,6 +840,47 @@ function splitList(value: string): string[] {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' }).format(new Date(value))
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+}
+
+function jobStatusLabel(status: string): string {
+  if (status === 'queued') return 'En cola'
+  if (status === 'running') return 'En curso'
+  if (status === 'completed') return 'Completado'
+  if (status === 'failed') return 'Falló'
+  return status
+}
+
+function jobKindLabel(kind: string): string {
+  if (kind === 'initial_generation') return 'Primera semana'
+  if (kind === 'weekly_generation') return 'Semana nueva'
+  if (kind === 'calorie_adjustment') return 'Reajuste calórico'
+  if (kind === 'chat_calorie_target_adjustment') return 'Reajuste calórico desde chat'
+  if (kind === 'regenerate_week') return 'Regeneración semanal'
+  if (kind === 'regenerate_day') return 'Regeneración de día'
+  if (kind === 'regenerate_meal') return 'Regeneración de comida'
+  if (kind.startsWith('retry_')) return `Reintento de ${jobKindLabel(kind.replace(/^retry_/, ''))}`
+  return kind.replace(/_/g, ' ')
+}
+
+function jobFailureLabel(code: string): string {
+  if (code === 'low_nutrition_confidence') return 'Nutrición con baja confianza'
+  if (code === 'ambiguous_ingredient') return 'Ingrediente ambiguo'
+  if (code === 'banned_item_conflict') return 'Conflicto con alimento prohibido'
+  if (code === 'repetition_conflict') return 'Conflicto de repetición'
+  if (code === 'generation_exhausted') return 'Generación agotada'
+  if (code === 'impossible_targets') return 'Objetivo imposible'
+  return code.replace(/_/g, ' ')
+}
+
+function jobFailureText(job: GenerationJob): string {
+  if (job.status !== 'failed') return job.logs.length > 0 ? `${job.logs.length} paso(s) registrados.` : 'Esperando actualización.'
+  const label = job.failureCode ? jobFailureLabel(job.failureCode) : 'Error de generación'
+  if (job.error) return `${label}: ${job.error}`
+  return `${label}. Puedes reintentar después de ajustar proveedor, fallback, objetivos o preferencias.`
 }
 
 function proposalLabel(kind: string): string {

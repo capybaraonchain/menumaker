@@ -11,6 +11,7 @@ import {
   previewRegenerateMealPlan,
   previewRegenerateWeekPlan,
   replaceMeal,
+  retryGenerationJob,
   saveProfilePreference,
   starRecipe,
   suggestMealReplacements,
@@ -114,6 +115,10 @@ export const appActionSchemas = {
     profileId: uuid,
     expectedName: z.string().min(1),
     exportBeforeDelete: z.boolean().default(true),
+  }),
+  retryGenerationJob: z.object({
+    profileId: uuid.optional(),
+    jobId: uuid,
   }),
 } as const
 
@@ -408,6 +413,26 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  retryGenerationJob: {
+    name: 'retryGenerationJob',
+    inputSchema: appActionSchemas.retryGenerationJob,
+    requiresConfirmation: false,
+    auditLabel: 'mutation.retry_generation_job',
+    confirmationCopyEs: () => '',
+    successCopyEs: (_, result) => {
+      const menuId = result && typeof result === 'object' && typeof (result as { menu?: { id?: unknown } }).menu?.id === 'string'
+        ? (result as { menu: { id: string } }).menu.id
+        : null
+      return menuId ? 'Listo. Reintenté la generación y guardé un nuevo menú.' : 'Listo. Reintenté la generación.'
+    },
+    async execute(input) {
+      const result = await retryGenerationJob(input.jobId)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId ?? result.menu.profileId),
+      }
+    },
+  },
 }
 
 export async function executeAppAction<Name extends AppActionName>(
@@ -606,6 +631,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'replaceMeal') return 'Reemplazar comida'
   if (name === 'applySimilarReplacements') return 'Aplicar similares'
   if (name === 'deleteProfile') return 'Eliminar perfil'
+  if (name === 'retryGenerationJob') return 'Reintentar generación'
   return 'Continuar'
 }
 

@@ -297,7 +297,8 @@ Acceptance:
 - `Semana` shows the current week and direct meal actions.
 - Meal detail shows recipe, ingredients, steps, macros, confidence, star, lock, and edit actions.
 - `Perfil` can delete the active profile only after exact-name confirmation and returns an export snapshot through the action result.
-- Generation progress and failure states are visible in the UI.
+- Generation progress and failure states are visible in the UI from persisted generation jobs.
+- Failed generation jobs can be retried through a typed app action and MCP tool.
 
 ## Phase 8: Meal Editing, Locks, Stars, And History
 
