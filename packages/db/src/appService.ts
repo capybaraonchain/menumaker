@@ -56,6 +56,7 @@ export interface AppState {
   savedRecipes: SavedRecipeView[]
   history: MenuHistoryItem[]
   generationJobs: GenerationJobView[]
+  mappableFoods: MappableFoodView[]
 }
 
 export interface ProfileRow {
@@ -178,6 +179,22 @@ export interface RelaxProfilePreferencesResult {
   removedDislikes: string[]
   removedBannedFoods: string[]
   profile: ProfileRow
+}
+
+export interface MappableFoodView {
+  id: string
+  name: string
+  category: string
+  aliases: string[]
+}
+
+export interface IngredientMappingView {
+  profileId: string
+  ingredientName: string
+  normalizedIngredientName: string
+  foodId: string
+  canonicalFoodName: string
+  source: 'user'
 }
 
 export interface ChatCommandPlanningInput {
@@ -477,6 +494,7 @@ export async function getAppState(profileId?: string): Promise<AppState> {
     savedRecipes: activeProfile ? await getSavedRecipes(activeProfile.id) : [],
     history: activeProfile ? await getMenuHistory(activeProfile.id) : [],
     generationJobs: activeProfile ? await getGenerationJobs(activeProfile.id) : [],
+    mappableFoods: await listMappableFoods(),
   }
 }
 
@@ -587,6 +605,46 @@ export async function relaxProfilePreferences(
     removedBannedFoods,
     profile: updated,
   }
+}
+
+export async function listMappableFoods(): Promise<MappableFoodView[]> {
+  return seedFoods.map((food) => ({
+    id: food.id,
+    name: food.aliases[0] ?? food.canonicalName,
+    category: food.category,
+    aliases: food.aliases,
+  })).sort((left, right) => left.name.localeCompare(right.name, 'es'))
+}
+
+export async function saveIngredientMapping(
+  profileId: string,
+  ingredientName: string,
+  canonicalFoodName: string,
+): Promise<IngredientMappingView> {
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  const normalizedIngredient = normalizeIngredientName(ingredientName)
+  if (normalizedIngredient.length < 2) throw new Error('Escribe el ingrediente que quieres mapear.')
+  const food = resolveSeedFood(canonicalFoodName)
+  if (!food) throw new Error('Selecciona un alimento determinístico válido.')
+  const sql = sqlClient()
+  await sql`
+    insert into food_aliases (food_id, alias, user_id, source)
+    values (${food.id}, ${ingredientName.trim()}, ${localUserId()}, 'user')
+    on conflict do nothing
+  `
+  return {
+    profileId,
+    ingredientName: ingredientName.trim(),
+    normalizedIngredientName: normalizedIngredient,
+    foodId: food.id,
+    canonicalFoodName: food.aliases[0] ?? food.canonicalName,
+    source: 'user',
+  }
+}
+
+export async function analyzeRecipeNutrition(recipe: RecipeCandidate, bannedFoods: string[] = []) {
+  return scoreRecipeWithUserMappings(recipe, bannedFoods)
 }
 
 export async function planChatCommandCached(input: ChatCommandPlanningInput): Promise<CachedPlannedChatCommand | null> {
@@ -1405,7 +1463,7 @@ export async function replaceMeal(menuMealId: string, recipe: RecipeCandidate): 
   const profile = (await listProfiles()).find((item) => item.id === menu.profileId)
   if (!profile) throw new Error('Perfil no encontrado.')
   if (recipeIncludesAny(recipe, profile.bannedFoods)) throw new Error('La receta propuesta contiene un alimento prohibido para este perfil.')
-  const scored = scoreRecipe(recipe, profile.bannedFoods)
+  const scored = await scoreRecipeWithUserMappings(recipe, profile.bannedFoods)
   if (scored.nutrition.confidence === 'unknown') throw new Error('La receta propuesta tiene ingredientes sin nutrición determinista suficiente.')
   const recipeId = await persistRecipe(scored, 'replacement')
   const sql = sqlClient()
@@ -2059,6 +2117,7 @@ async function recipePoolForSlot(input: {
   menuContext?: unknown
 }): Promise<RecipePoolResult> {
   const avoidFoods = unique([...input.profile.bannedFoods, ...input.profile.dislikes, ...input.avoidFoods])
+  const ingredientMappings = await ingredientMappingsForUser()
   const generationInput: RecipeGenerationInput = {
     locale: input.profile.locale,
     slot: input.slot,
@@ -2082,6 +2141,7 @@ async function recipePoolForSlot(input: {
     targetNutrition: input.targetNutrition,
     source: 'llm',
     limit: input.count,
+    ingredientMappings,
   })
   if (llmRecipes.length >= Math.min(input.count, 3)) {
     return {
@@ -2118,6 +2178,7 @@ async function recipePoolForSlot(input: {
     targetNutrition: input.targetNutrition,
     source: 'template',
     limit: input.count,
+    ingredientMappings,
   })
   const seen = new Set(llmRecipes.map((item) => normalizeIngredientName(item.recipe.title)))
   const merged = [
@@ -2221,6 +2282,69 @@ function stableJson(value: unknown): string {
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`
 }
 
+interface IngredientAliasMapping {
+  alias: string
+  normalizedAlias: string
+  foodId: string
+  canonicalName: string
+}
+
+async function ingredientMappingsForUser(): Promise<IngredientAliasMapping[]> {
+  const sql = sqlClient()
+  const rows = await sql<Array<{ food_id: string; alias: string }>>`
+    select fa.food_id, fa.alias
+    from food_aliases fa
+    where fa.user_id = ${localUserId()} and fa.source = 'user'
+    order by length(fa.alias) desc
+  `
+  return rows
+    .map((row) => {
+      const food = seedFoods.find((item) => item.id === row.food_id)
+      return {
+        alias: row.alias,
+        normalizedAlias: normalizeIngredientName(row.alias),
+        foodId: row.food_id,
+        canonicalName: food?.aliases[0] ?? food?.canonicalName ?? row.food_id,
+      }
+    })
+    .filter((row) => row.normalizedAlias.length >= 2)
+}
+
+function applyIngredientMappingsToRecipe(recipe: RecipeCandidate, mappings: IngredientAliasMapping[]): RecipeCandidate {
+  if (mappings.length === 0) return recipe
+  return {
+    ...recipe,
+    ingredients: recipe.ingredients.map((ingredient) => {
+      const mapped = mappedIngredientName(ingredient.name, mappings)
+      return mapped ? { ...ingredient, name: mapped } : ingredient
+    }),
+  }
+}
+
+function mappedIngredientName(name: string, mappings: IngredientAliasMapping[]): string | null {
+  const normalized = normalizeIngredientName(name)
+  const mapping = mappings.find((item) => {
+    if (normalized === item.normalizedAlias) return true
+    if (item.normalizedAlias.length < 4) return false
+    return normalized.includes(item.normalizedAlias)
+  })
+  return mapping?.canonicalName ?? null
+}
+
+function resolveSeedFood(value: string) {
+  const normalized = normalizeIngredientName(value)
+  return seedFoods.find((food) => {
+    if (normalizeIngredientName(food.id) === normalized) return true
+    if (normalizeIngredientName(food.canonicalName) === normalized) return true
+    return food.aliases.some((alias) => normalizeIngredientName(alias) === normalized)
+  }) ?? null
+}
+
+async function scoreRecipeWithUserMappings(recipe: RecipeCandidate, bannedFoods: string[] = []) {
+  const mappings = await ingredientMappingsForUser()
+  return scoreRecipe(applyIngredientMappingsToRecipe(recipe, mappings), bannedFoods)
+}
+
 function scoreGeneratedCandidates(input: {
   candidates: RecipeCandidate[]
   avoidedFoods: string[]
@@ -2228,6 +2352,7 @@ function scoreGeneratedCandidates(input: {
   targetNutrition: NutritionTotals
   source: 'llm' | 'template'
   limit: number
+  ingredientMappings?: IngredientAliasMapping[]
 }): GeneratedScoredRecipe[] {
   const avoidedTitles = new Set(input.avoidTitles.map(normalizeIngredientName))
   const seen = new Set<string>()
@@ -2237,12 +2362,13 @@ function scoreGeneratedCandidates(input: {
     if (!title || seen.has(title) || avoidedTitles.has(title)) continue
     seen.add(title)
     if (candidate.prepTimeMinutes > 120) continue
-    if (recipeIncludesAny(candidate, input.avoidedFoods)) continue
+    const mappedCandidate = applyIngredientMappingsToRecipe(candidate, input.ingredientMappings ?? [])
+    if (recipeIncludesAny(mappedCandidate, input.avoidedFoods)) continue
 
-    const raw = scoreRecipe(candidate, input.avoidedFoods)
+    const raw = scoreRecipe(mappedCandidate, input.avoidedFoods)
     if (hasUnknownIngredients(raw)) continue
     const factor = clamp(input.targetNutrition.calories / Math.max(raw.nutrition.calories, 1), 0.72, 1.28)
-    const scaled = scoreRecipe(scaleRecipe(candidate, factor), input.avoidedFoods)
+    const scaled = scoreRecipe(scaleRecipe(mappedCandidate, factor), input.avoidedFoods)
     if (hasUnknownIngredients(scaled)) continue
     scored.push({
       recipe: scaled,

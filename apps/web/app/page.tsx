@@ -85,8 +85,10 @@ type AppState = {
   savedRecipes: Array<{ savedRecipeId: string; recipe: Recipe }>
   history: Array<{ id: string; weekStart: string; createdAt: string; nutrition: Nutrition }>
   generationJobs: GenerationJob[]
+  mappableFoods: MappableFood[]
   provider?: any
 }
+type MappableFood = { id: string; name: string; category: string; aliases: string[] }
 type GenerationJob = {
   id: string
   profileId: string | null
@@ -112,6 +114,7 @@ type RemediationPlan = {
   context?: Record<string, any>
 }
 type PreferenceRelaxationRequest = { job: GenerationJob; plan: RemediationPlan }
+type IngredientMappingRequest = { job: GenerationJob; plan: RemediationPlan }
 type ReplacementProposal = {
   proposalId: string
   affectedMeals: string[]
@@ -152,6 +155,7 @@ export default function App() {
   const [proposal, setProposal] = useState<ReplacementProposal | null>(null)
   const [pendingReplacement, setPendingReplacement] = useState<PendingReplacement | null>(null)
   const [preferenceRelaxation, setPreferenceRelaxation] = useState<PreferenceRelaxationRequest | null>(null)
+  const [ingredientMapping, setIngredientMapping] = useState<IngredientMappingRequest | null>(null)
   const [creatingProfile, setCreatingProfile] = useState(false)
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
@@ -255,6 +259,7 @@ export default function App() {
             onEditMeal={setEditMeal}
             onAction={postAction}
             onRelaxPreferences={setPreferenceRelaxation}
+            onReviewIngredients={setIngredientMapping}
           />
         )}
         {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
@@ -367,6 +372,17 @@ export default function App() {
           plan={preferenceRelaxation.plan}
           onAction={postAction}
           onClose={() => setPreferenceRelaxation(null)}
+        />
+      )}
+
+      {ingredientMapping && state.activeProfile && (
+        <IngredientMappingModal
+          profile={state.activeProfile}
+          job={ingredientMapping.job}
+          plan={ingredientMapping.plan}
+          foods={state.mappableFoods}
+          onAction={postAction}
+          onClose={() => setIngredientMapping(null)}
         />
       )}
 
@@ -516,6 +532,7 @@ function WeekScreen({
   onEditMeal,
   onAction,
   onRelaxPreferences,
+  onReviewIngredients,
 }: {
   state: AppState
   busy: string | null
@@ -523,12 +540,13 @@ function WeekScreen({
   onEditMeal: (meal: Meal) => void
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+  onReviewIngredients: (request: IngredientMappingRequest) => void
 }) {
   const menu = state.currentMenu
   if (!menu) {
     return (
       <div className="week-screen">
-        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} compact={false} />
+        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
         {state.activeProfile?.latestTarget && (
           <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
@@ -554,7 +572,7 @@ function WeekScreen({
         <span>Confianza {menu.target.confidence}</span>
       </section>
       <GenerationNotice menu={menu} />
-      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} compact />
+      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} compact />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -671,6 +689,7 @@ function GenerationJobsPanel({
   profileId,
   onAction,
   onRelaxPreferences,
+  onReviewIngredients,
   compact = false,
 }: {
   jobs: GenerationJob[]
@@ -678,6 +697,7 @@ function GenerationJobsPanel({
   profileId?: string
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+  onReviewIngredients: (request: IngredientMappingRequest) => void
   compact?: boolean
 }) {
   const visibleJobs = jobs
@@ -710,6 +730,7 @@ function GenerationJobsPanel({
                   compact={compact}
                   onAction={onAction}
                   onRelaxPreferences={onRelaxPreferences}
+                  onReviewIngredients={onReviewIngredients}
                 />
               )}
             </div>
@@ -732,6 +753,7 @@ function JobRemediation({
   compact,
   onAction,
   onRelaxPreferences,
+  onReviewIngredients,
 }: {
   job: GenerationJob
   plan: RemediationPlan
@@ -739,6 +761,7 @@ function JobRemediation({
   compact: boolean
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+  onReviewIngredients: (request: IngredientMappingRequest) => void
 }) {
   const hasPreferencesToRelax = Boolean(profile && (profile.dislikes.length > 0 || profile.bannedFoods.length > 0))
   return (
@@ -763,6 +786,13 @@ function JobRemediation({
             if (action.kind === 'relax_preferences' && hasPreferencesToRelax) {
               return (
                 <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onRelaxPreferences({ job, plan })}>
+                  {action.label}
+                </button>
+              )
+            }
+            if (action.kind === 'review_ingredients') {
+              return (
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onReviewIngredients({ job, plan })}>
                   {action.label}
                 </button>
               )
@@ -861,6 +891,84 @@ function PreferenceChecklist({ title, values, selected, onChange }: { title: str
         )
       })}
     </fieldset>
+  )
+}
+
+function IngredientMappingModal({
+  profile,
+  job,
+  plan,
+  foods,
+  onAction,
+  onClose,
+}: {
+  profile: Profile
+  job: GenerationJob
+  plan: RemediationPlan
+  foods: MappableFood[]
+  onAction: (payload: any) => Promise<any>
+  onClose: () => void
+}) {
+  const [ingredientName, setIngredientName] = useState(ingredientNameFromRemediation(plan, job))
+  const [canonicalFoodName, setCanonicalFoodName] = useState(foods[0]?.name ?? '')
+  const [error, setError] = useState<string | null>(null)
+  const [localBusy, setLocalBusy] = useState<string | null>(null)
+
+  async function apply(retry: boolean) {
+    if (!ingredientName.trim() || !canonicalFoodName) {
+      setError('Escribe el ingrediente y el alimento determinístico correcto.')
+      return
+    }
+    setError(null)
+    setLocalBusy(retry ? 'retry' : 'save')
+    try {
+      await onAction({
+        action: 'saveIngredientMapping',
+        profileId: profile.id,
+        ingredientName,
+        canonicalFoodName,
+      })
+      if (retry && job.status === 'failed') {
+        await onAction({ action: 'retryGenerationJob', profileId: profile.id, jobId: job.id })
+      }
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo guardar el mapeo.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
+
+  return (
+    <Modal title="Revisar ingredientes" onClose={onClose}>
+      <div className="remediation-modal">
+        <p>{plan.summary}</p>
+        <label>
+          Ingrediente en la receta
+          <input value={ingredientName} onChange={(event) => setIngredientName(event.target.value)} placeholder="ej. queso fresco batido" />
+        </label>
+        <label>
+          Tratar como
+          <select value={canonicalFoodName} onChange={(event) => setCanonicalFoodName(event.target.value)}>
+            {foods.map((food) => (
+              <option key={food.id} value={food.name}>{food.name} · {food.category}</option>
+            ))}
+          </select>
+        </label>
+        <p className="muted">Esto guarda un alias confirmado y el scorer lo usará en generaciones, reemplazos y análisis nutricional.</p>
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary" type="button" disabled={localBusy !== null} onClick={() => apply(false)}>
+            <Save size={16} /> {localBusy === 'save' ? 'Guardando...' : 'Guardar mapeo'}
+          </button>
+          {job.status === 'failed' && (
+            <button className="primary" type="button" disabled={localBusy !== null} onClick={() => apply(true)}>
+              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Reintentando...' : 'Guardar y reintentar'}
+            </button>
+          )}
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -1120,6 +1228,21 @@ function jobFailureText(job: GenerationJob): string {
   const label = job.failureCode ? jobFailureLabel(job.failureCode) : 'Error de generación'
   if (job.error) return `${label}: ${job.error}`
   return `${label}. Puedes reintentar después de ajustar proveedor, fallback, objetivos o preferencias.`
+}
+
+function ingredientNameFromRemediation(plan: RemediationPlan, job: GenerationJob): string {
+  const values = [
+    plan.context?.ingredientName,
+    plan.context?.ingredient,
+    job.result?.ingredientName,
+    job.result?.ingredient,
+  ]
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  const text = [job.error, plan.summary, ...plan.steps].filter(Boolean).join(' ')
+  const quoted = text.match(/["“”']([^"“”']{2,60})["“”']/)
+  return quoted?.[1]?.trim() ?? ''
 }
 
 function proposalLabel(kind: string): string {

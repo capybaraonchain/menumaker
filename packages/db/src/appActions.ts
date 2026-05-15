@@ -14,6 +14,7 @@ import {
   replaceMeal,
   retryGenerationJob,
   runGenerationJob,
+  saveIngredientMapping,
   saveProfilePreference,
   relaxProfilePreferences,
   starRecipe,
@@ -135,6 +136,11 @@ export const appActionSchemas = {
   runGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
+  }),
+  saveIngredientMapping: z.object({
+    profileId: uuid,
+    ingredientName: z.string().min(1),
+    canonicalFoodName: z.string().min(1),
   }),
 } as const
 
@@ -471,6 +477,21 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       const result = await relaxProfilePreferences(input.profileId, input.removeDislikes, input.removeBannedFoods)
       return {
         ...result,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  saveIngredientMapping: {
+    name: 'saveIngredientMapping',
+    inputSchema: appActionSchemas.saveIngredientMapping,
+    requiresConfirmation: false,
+    auditLabel: 'mutation.save_ingredient_mapping',
+    confirmationCopyEs: () => '',
+    successCopyEs: (input) => `Listo. Cuando aparezca **${input.ingredientName}**, lo trataré como **${input.canonicalFoodName}** para calcular nutrición.`,
+    async execute(input) {
+      const mapping = await saveIngredientMapping(input.profileId, input.ingredientName, input.canonicalFoodName)
+      return {
+        mapping,
         state: await appStateResult(input.profileId),
       }
     },

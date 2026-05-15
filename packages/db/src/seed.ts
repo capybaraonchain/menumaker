@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   `
 
   for (const food of seedFoods) {
-    await sql`delete from food_aliases where food_id = ${food.id}`
+    await sql`delete from food_aliases where food_id = ${food.id} and source = 'seed' and user_id is null`
     await sql`delete from food_mappings where source_id = ${`seed:${food.id}`}`
     await sql`delete from nutrition_records where source_id = ${`seed:${food.id}`}`
     await sql`
@@ -38,8 +38,9 @@ async function main(): Promise<void> {
     `
     for (const alias of food.aliases) {
       await sql`
-        insert into food_aliases (food_id, alias)
-        values (${food.id}, ${alias})
+        insert into food_aliases (food_id, alias, source)
+        values (${food.id}, ${alias}, 'seed')
+        on conflict do nothing
       `
     }
   }

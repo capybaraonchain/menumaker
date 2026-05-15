@@ -125,8 +125,16 @@ create table if not exists food_items (
 create table if not exists food_aliases (
   id uuid primary key default gen_random_uuid(),
   food_id text not null references food_items(id) on delete cascade,
-  alias text not null
+  alias text not null,
+  user_id uuid references users(id) on delete cascade,
+  source text not null default 'seed'
 );
+
+alter table food_aliases add column if not exists user_id uuid references users(id) on delete cascade;
+alter table food_aliases add column if not exists source text not null default 'seed';
+create index if not exists food_aliases_user_source_idx on food_aliases(user_id, source);
+create unique index if not exists food_aliases_unique_seed_alias_idx on food_aliases(food_id, lower(alias)) where user_id is null;
+create unique index if not exists food_aliases_unique_user_alias_idx on food_aliases(user_id, lower(alias)) where user_id is not null;
 
 create table if not exists source_foods (
   id text primary key,

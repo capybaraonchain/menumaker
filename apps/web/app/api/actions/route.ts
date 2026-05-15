@@ -23,6 +23,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   retryGenerationJob: 'retryGenerationJob',
   runGenerationJob: 'runGenerationJob',
   savePreference: 'savePreference',
+  saveIngredientMapping: 'saveIngredientMapping',
   startWeeklyMenuGeneration: 'startWeeklyMenuGeneration',
   starRecipe: 'starRecipe',
   suggestReplacements: 'suggestMealReplacement',

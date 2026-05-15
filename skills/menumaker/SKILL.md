@@ -19,6 +19,7 @@ Use this skill when operating the local MenuMaker app through MCP.
 - Use deterministic nutrition tools before making calorie or macro claims.
 - Mention confidence when nutrition is estimated, generic, or low-confidence.
 - Never treat AI-generated recipe prose as authoritative nutrition.
+- If a low-confidence ingredient is just an alias for a known food, ask for confirmation and use `save_ingredient_mapping` before retrying or claiming nutrition.
 - Keep scope to weekly diet planning.
 
 ## Do Not Expand Scope
@@ -76,6 +77,13 @@ For macro questions:
 1. Inspect profile and macro targets.
 2. Use nutrition snapshots or `analyze_recipe_nutrition`.
 3. Explain uncertainty if confidence is not deterministic.
+
+For ingredient matching issues:
+
+1. Inspect the failed job or low-confidence recipe ingredient.
+2. Ask the user which deterministic food it should map to.
+3. Call `save_ingredient_mapping` only after confirmation.
+4. Retry generation or rerun nutrition analysis through deterministic tools; do not bypass validation.
 
 For in-app chat behavior:
 

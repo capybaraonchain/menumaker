@@ -20,6 +20,7 @@ import {
   getRecipe,
   getSavedRecipes,
   getWeeklyMenu,
+  analyzeRecipeNutrition,
   listProfiles,
   lockDay,
   lockMeal,
@@ -37,7 +38,6 @@ import {
   type MenuMealView,
   type ProfileRow,
 } from '@menumaker/db'
-import { scoreRecipe } from '@menumaker/nutrition'
 import { z } from 'zod'
 
 const server = new McpServer({
@@ -286,6 +286,24 @@ server.registerTool(
 )
 
 server.registerTool(
+  'save_ingredient_mapping',
+  {
+    description: 'Mutation: save a user-confirmed ingredient alias so deterministic nutrition matching can resolve future recipes. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      ingredientName: z.string().min(1),
+      canonicalFoodName: z.string().min(1),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, ingredientName, canonicalFoodName, confirmed }) => {
+    requireConfirmation(confirmed, 'save ingredient mapping')
+    return json(await executeAppAction('saveIngredientMapping', { profileId, ingredientName, canonicalFoodName }, 'mcp'))
+  },
+)
+
+server.registerTool(
   'analyze_recipe_nutrition',
   {
     description: 'Read-only: deterministically calculate recipe nutrition from structured ingredients.',
@@ -306,7 +324,7 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
-  async ({ recipe, bannedFoods }) => json(scoreRecipe(recipe, bannedFoods ?? [])),
+  async ({ recipe, bannedFoods }) => json(await analyzeRecipeNutrition(recipe, bannedFoods ?? [])),
 )
 
 server.registerTool(

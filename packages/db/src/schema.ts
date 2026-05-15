@@ -123,6 +123,8 @@ export const foodAliases = pgTable('food_aliases', {
   id: uuid('id').primaryKey().defaultRandom(),
   foodId: text('food_id').notNull().references(() => foodItems.id),
   alias: text('alias').notNull(),
+  userId: uuid('user_id').references(() => users.id),
+  source: text('source').notNull().default('seed'),
 })
 
 export const sourceFoods = pgTable('source_foods', {

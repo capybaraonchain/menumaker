@@ -148,13 +148,13 @@ Historical menus should remain understandable as originally generated.
 Nutrition matching uses these tables or equivalent structures:
 
 - `food_items`: canonical app foods.
-- `food_aliases`: Spanish and English aliases for canonical foods.
+- `food_aliases`: Spanish and English aliases for canonical foods, plus user-confirmed aliases for local remediation.
 - `source_foods`: raw imported or searchable records from USDA, BEDCA, Open Food Facts, or other sources.
 - `nutrition_records`: per-100g or per-serving nutrition values from a source.
 - `food_mappings`: mappings from canonical food items to source foods.
 - `unit_conversions`: conversions for tablespoon, cup, piece, slice, and similar units.
 - `ingredient_matches`: saved result for a recipe ingredient line.
-- `user_food_overrides`: user-confirmed corrections.
+- `user_food_overrides`: user-confirmed per-100g corrections, deferred beyond the first alias-remediation slice.
 
 These refine the broader `food_items`, `nutrition_records`, `recipe_ingredients`, and `nutrition_estimates` tables from ADR 0003.
 
@@ -166,7 +166,7 @@ For v1:
 - Use USDA FoodData Central for robust generic food coverage.
 - Include a BEDCA adapter boundary.
 - Implement BEDCA if access or import is straightforward.
-- Use a user confirmation loop for ambiguous ingredients.
+- Use a user confirmation loop for ambiguous ingredients. In local v1 this first lands as alias mapping to an existing deterministic food; later versions can add source-record picking and custom nutrition records.
 - Allow AI fallback only when visibly marked as estimated.
 
 ## Consequences

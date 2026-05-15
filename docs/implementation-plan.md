@@ -148,6 +148,8 @@ This seed dataset is not a substitute for USDA/Open Food Facts/BEDCA integration
 Implement:
 
 - Ingredient text normalization.
+- User-confirmed ingredient aliases saved from remediation flows.
+- Recipe generation, replacement validation, and nutrition analysis should apply those aliases before deterministic scoring.
 - Gram/ml normalization for explicit metric units.
 - Basic unit conversions for common household units.
 - Food-specific serving conversions for ambiguous units such as `unidad`, `pieza`, `rebanada`, and `taza` when the matched food has a known serving weight.
@@ -238,6 +240,7 @@ Acceptance:
 - Chat responses can report cache hits without exposing provider tokens.
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
 - Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
+- Low-confidence or ambiguous-ingredient failures can save a mapping and retry the generation without bypassing deterministic nutrition.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

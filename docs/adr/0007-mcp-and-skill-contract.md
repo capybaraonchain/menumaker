@@ -49,6 +49,7 @@ Read-only tools:
 - `get_menu_history`
 - `get_generation_jobs`
 - `analyze_recipe_nutrition`
+- `save_ingredient_mapping`
 - `explain_macro_targets`
 
 Proposal tools can run freely because they do not persist broad changes.
@@ -171,6 +172,7 @@ Agents must:
 - Use deterministic nutrition tools before answering calorie or macro questions.
 - Mention confidence when nutrition is estimated, generic, or low-confidence.
 - Surface important low-confidence ingredients.
+- When the user confirms an unknown ingredient is equivalent to a known deterministic food, use `save_ingredient_mapping` before retrying generation or re-analyzing nutrition.
 - Avoid silently changing historical menu snapshots.
 
 ## Lock And Scope Rules

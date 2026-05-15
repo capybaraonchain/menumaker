@@ -87,6 +87,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Ingredient quantities can be normalized to grams/ml where possible.
 - [x] Seed nutrition dataset exists for local v1.
 - [x] Ingredient aliases work in Spanish and English.
+- [x] User-confirmed ingredient aliases can be saved and reused by the scorer.
 - [x] Ingredient matching returns confidence labels.
 - [x] Per-ingredient nutrition is calculated.
 - [x] Per-recipe nutrition is calculated.
@@ -209,6 +210,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Impossible targets failure is visible and actionable.
 - [x] Low nutrition confidence failure includes persisted remediation steps.
 - [x] Ambiguous ingredient failure includes persisted remediation steps.
+- [x] Low nutrition confidence and ambiguous ingredient remediation can open a guided alias-mapping flow.
 - [x] Banned-item conflict failure includes persisted remediation steps.
 - [x] Generation-exhausted failure includes retry and persisted remediation steps.
 - [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.
@@ -240,6 +242,7 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] `get_profile` works.
 - [x] `get_weekly_menu` works.
 - [x] `analyze_recipe_nutrition` works.
+- [x] `save_ingredient_mapping` works through the shared app action registry.
 - [x] `suggest_meal_replacements` works.
 - [x] `apply_similar_replacements` works through the shared app action registry.
 - [x] `preview_calorie_adjustment_plan` works.
