@@ -1,0 +1,29 @@
+{
+  "name": "menumaker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:mcp\"",
+    "dev:web": "npm --workspace @menumaker/web run dev",
+    "dev:mcp": "npm --workspace @menumaker/mcp run dev",
+    "build": "npm --workspaces --if-present run build",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "lint": "npm --workspaces --if-present run lint",
+    "db:ensure": "createdb menumaker 2>/dev/null || true",
+    "db:migrate": "npm --workspace @menumaker/db run migrate",
+    "db:seed": "npm --workspace @menumaker/db run seed",
+    "setup:local": "npm run db:ensure && npm run db:migrate && npm run db:seed"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.3"
+  }
+}
+

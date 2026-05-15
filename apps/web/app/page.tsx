@@ -1,0 +1,514 @@
+'use client'
+
+import {
+  Apple,
+  Archive,
+  Bot,
+  CalendarDays,
+  Check,
+  ChevronRight,
+  History,
+  Lock,
+  MessageCircle,
+  RefreshCw,
+  Save,
+  Sparkles,
+  Star,
+  Unlock,
+  UserRound,
+  Utensils,
+  X,
+} from 'lucide-react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+
+type Tab = 'semana' | 'recetas' | 'historial' | 'perfil'
+type Nutrition = { calories: number; proteinG: number; carbsG: number; fatG: number; fiberG?: number; confidence: string }
+type Ingredient = {
+  id: string
+  name: string
+  amount: number
+  unit: string
+  normalizedAmount: number
+  normalizedUnit: string
+  confidence: string
+  nutrition: Nutrition
+  notes: string[]
+}
+type Recipe = {
+  id: string
+  title: string
+  description: string
+  prepTimeMinutes: number
+  cuisine: string
+  flavorProfile: string
+  tags: string[]
+  steps: string[]
+  nutrition: Nutrition
+  ingredients: Ingredient[]
+}
+type Meal = { id: string; slot: string; locked: boolean; recipe: Recipe; nutrition: Nutrition }
+type Day = { id: string; dayIndex: number; locked: boolean; meals: Meal[] }
+type Profile = {
+  id: string
+  name: string
+  locale: 'es' | 'en'
+  weightKg: number
+  targetWeightKg: number
+  proteinCalculationWeightKg: number
+  heightCm: number
+  age: number | null
+  sex: string
+  activityLevel: string
+  goal: string
+  macroMode: string
+  likes: string[]
+  dislikes: string[]
+  bannedFoods: string[]
+  latestTarget?: any
+}
+type AppState = {
+  profiles: Profile[]
+  activeProfile: Profile | null
+  currentMenu: null | {
+    id: string
+    profileId: string
+    weekStart: string
+    nutrition: Nutrition
+    target: any
+    days: Day[]
+  }
+  savedRecipes: Array<{ savedRecipeId: string; recipe: Recipe }>
+  history: Array<{ id: string; weekStart: string; createdAt: string; nutrition: Nutrition }>
+  provider?: any
+}
+type ReplacementProposal = {
+  proposalId: string
+  affectedMeals: string[]
+  inferredIngredient: string | null
+  options: Array<{ kind: string; recipe: any; nutrition: Nutrition; macroImpact: Nutrition }>
+}
+type SimilarPrompt = { ingredient: string; mealIds: string[] }
+
+const dayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+const slotLabels: Record<string, string> = { breakfast: 'Desayuno', lunch: 'Comida', dinner: 'Cena', snack: 'Snack' }
+const activityLabels: Record<string, string> = {
+  sedentary: 'Sedentario · 1.4',
+  lightly_active: 'Ligeramente activo · 1.5',
+  moderately_active: 'Moderado · 1.6',
+  active: 'Activo · 1.8',
+  very_active: 'Muy activo · 2.0',
+}
+
+export default function App() {
+  const [state, setState] = useState<AppState | null>(null)
+  const [tab, setTab] = useState<Tab>('semana')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null)
+  const [editMeal, setEditMeal] = useState<Meal | null>(null)
+  const [proposal, setProposal] = useState<ReplacementProposal | null>(null)
+  const [similarPrompt, setSimilarPrompt] = useState<SimilarPrompt | null>(null)
+  const [creatingProfile, setCreatingProfile] = useState(false)
+  const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatInput, setChatInput] = useState('¿Cómo ves los macros de esta semana?')
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([])
+  const activeProfileId = state?.activeProfile?.id
+
+  useEffect(() => {
+    void loadState()
+  }, [])
+
+  async function loadState(profileId?: string) {
+    setLoading(true)
+    const res = await fetch(`/api/state${profileId ? `?profileId=${profileId}` : ''}`)
+    setState(await res.json())
+    setLoading(false)
+  }
+
+  async function postAction(payload: any) {
+    setBusy(payload.action)
+    const res = await fetch('/api/actions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+    const data = await res.json()
+    setBusy(null)
+    if (!res.ok) throw new Error(data.error ?? 'Error')
+    if (data.state) setState(data.state)
+    return data.result
+  }
+
+  if (loading) return <LoadingScreen />
+  if (!state?.activeProfile) return <Onboarding onDone={setState} />
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="tiny">MenuMaker</p>
+          <h1>{state.activeProfile.name}</h1>
+        </div>
+        <div className={`provider ${state.provider?.configured ? 'ready' : 'offline'}`}>
+          <span />
+          {state.provider?.configured ? `${state.provider.model} ${state.provider.reasoningEffort}` : 'Codex offline'}
+        </div>
+      </header>
+
+      <section className="content">
+        {tab === 'semana' && (
+          <WeekScreen
+            state={state}
+            busy={busy}
+            onSelectMeal={setSelectedMeal}
+            onEditMeal={setEditMeal}
+            onAction={postAction}
+          />
+        )}
+        {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
+        {tab === 'historial' && <HistoryScreen state={state} />}
+        {tab === 'perfil' && <ProfileScreen state={state} onSwitch={(id) => loadState(id)} onCreate={() => setCreatingProfile(true)} />}
+      </section>
+
+      <button className="chat-fab" onClick={() => setChatOpen(true)} aria-label="Abrir chat">
+        <MessageCircle size={22} />
+      </button>
+
+      <nav className="bottom-nav">
+        <NavButton active={tab === 'semana'} icon={<CalendarDays />} label="Semana" onClick={() => setTab('semana')} />
+        <NavButton active={tab === 'recetas'} icon={<Star />} label="Recetas" onClick={() => setTab('recetas')} />
+        <NavButton active={tab === 'historial'} icon={<History />} label="Historial" onClick={() => setTab('historial')} />
+        <NavButton active={tab === 'perfil'} icon={<UserRound />} label="Perfil" onClick={() => setTab('perfil')} />
+      </nav>
+
+      {selectedMeal && <MealModal meal={selectedMeal} profileId={activeProfileId!} onClose={() => setSelectedMeal(null)} onAction={postAction} onEdit={() => {
+        setEditMeal(selectedMeal)
+        setSelectedMeal(null)
+      }} />}
+
+      {editMeal && (
+        <Modal title="Editar plato" onClose={() => {
+          setEditMeal(null)
+          setProposal(null)
+        }}>
+          <div className="edit-flow">
+            <p className="muted">Pide un cambio concreto. Primero verás opciones; los cambios de toda la semana requieren confirmación.</p>
+            <textarea value={editRequest} onChange={(event) => setEditRequest(event.target.value)} />
+            <button className="primary" onClick={async () => {
+              const next = await postAction({ action: 'suggestReplacements', menuMealId: editMeal.id, request: editRequest, profileId: activeProfileId })
+              setProposal(next)
+            }}>
+              <Sparkles size={18} /> Ver opciones
+            </button>
+            {proposal && (
+              <div className="proposal-list">
+                <div className="impact-note">
+                  {proposal.inferredIngredient ? `Detectado: ${proposal.inferredIngredient}. Afecta ${proposal.affectedMeals.length} plato(s).` : 'Cambio solo para este plato.'}
+                </div>
+                {proposal.options.map((option) => (
+                  <button key={option.kind} className="proposal-row" onClick={async () => {
+                    await postAction({ action: 'replaceMeal', menuMealId: editMeal.id, recipe: option.recipe, profileId: activeProfileId })
+                    const relatedMealIds = proposal.affectedMeals.filter((mealId) => mealId !== editMeal.id)
+                    if (proposal.inferredIngredient && relatedMealIds.length > 0) {
+                      setSimilarPrompt({ ingredient: proposal.inferredIngredient, mealIds: relatedMealIds })
+                    }
+                    setEditMeal(null)
+                    setProposal(null)
+                  }}>
+                    <span>
+                      <strong>{proposalLabel(option.kind)}</strong>
+                      <small>{option.recipe.title}</small>
+                    </span>
+                    <NutritionDelta delta={option.macroImpact} />
+                  </button>
+                ))}
+                {proposal.inferredIngredient && (
+                  <button className="secondary" onClick={async () => {
+                    await postAction({ action: 'savePreference', profileId: activeProfileId, value: proposal.inferredIngredient, kind: 'dislike', scope: 'profile' })
+                  }}>
+                    <Save size={16} /> Guardar como preferencia
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {similarPrompt && (
+        <Modal title="Aplicar cambios similares" onClose={() => setSimilarPrompt(null)}>
+          <div className="confirm-flow">
+            <p>
+              Hay {similarPrompt.mealIds.length} plato(s) más con {similarPrompt.ingredient}. ¿Quieres reemplazarlos también y guardar
+              esta preferencia para futuras semanas?
+            </p>
+            <button className="primary" onClick={async () => {
+              await postAction({
+                action: 'applySimilarReplacements',
+                profileId: activeProfileId,
+                ingredient: similarPrompt.ingredient,
+                menuMealIds: similarPrompt.mealIds,
+              })
+              setSimilarPrompt(null)
+            }}>
+              <Check size={18} /> Aplicar similares
+            </button>
+            <button className="secondary" onClick={() => setSimilarPrompt(null)}>Solo este plato</button>
+          </div>
+        </Modal>
+      )}
+
+      {creatingProfile && (
+        <Modal title="Nuevo perfil" onClose={() => setCreatingProfile(false)}>
+          <Onboarding embedded onDone={(nextState) => {
+            setState(nextState)
+            setCreatingProfile(false)
+            setTab('semana')
+          }} />
+        </Modal>
+      )}
+
+      {chatOpen && (
+        <Modal title="Chat del menú" onClose={() => setChatOpen(false)}>
+          <div className="chat-box">
+            <div className="chat-messages">
+              {chatMessages.length === 0 && <p className="muted">Pregunta por macros, cambios o la variedad de la semana. El chat propone; no cambia nada sin confirmación.</p>}
+              {chatMessages.map((message, index) => <p key={index} className={message.role}>{message.text}</p>)}
+            </div>
+            <form onSubmit={async (event) => {
+              event.preventDefault()
+              const message = chatInput.trim()
+              if (!message) return
+              setChatMessages((items) => [...items, { role: 'user', text: message }])
+              setChatInput('')
+              const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profileId: activeProfileId, message }) })
+              const data = await res.json()
+              setChatMessages((items) => [...items, { role: 'assistant', text: data.text ?? data.error }])
+            }}>
+              <input value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
+              <button className="icon-button" aria-label="Enviar"><ChevronRight /></button>
+            </form>
+          </div>
+        </Modal>
+      )}
+    </main>
+  )
+}
+
+function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) => void; embedded?: boolean }) {
+  const [error, setError] = useState<string | null>(null)
+  const [rough, setRough] = useState(true)
+  const [macroMode, setMacroMode] = useState('balanced')
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError(null)
+    const form = new FormData(event.currentTarget)
+    const selectedMacroMode = String(form.get('macroMode') || 'balanced')
+    const payload = {
+      name: String(form.get('name') || 'Perfil'),
+      locale: 'es',
+      weightKg: Number(form.get('weightKg')),
+      targetWeightKg: Number(form.get('targetWeightKg')),
+      heightCm: Number(form.get('heightCm')),
+      age: form.get('age') ? Number(form.get('age')) : null,
+      sex: String(form.get('sex') || 'skipped'),
+      acceptsRoughEstimate: rough,
+      activityLevel: String(form.get('activityLevel') || 'lightly_active'),
+      goal: String(form.get('goal') || 'cut'),
+      macroMode: selectedMacroMode,
+      manualTargets: selectedMacroMode === 'manual' ? {
+        calories: Number(form.get('manualCalories')),
+        proteinG: Number(form.get('manualProteinG')),
+        carbsG: Number(form.get('manualCarbsG')),
+        fatG: Number(form.get('manualFatG')),
+      } : null,
+      likes: splitList(String(form.get('likes') || '')),
+      dislikes: splitList(String(form.get('dislikes') || '')),
+      bannedFoods: splitList(String(form.get('bannedFoods') || '')),
+    }
+    const res = await fetch('/api/onboarding', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+    const data = await res.json()
+    if (!res.ok) setError(data.error)
+    else onDone(data)
+  }
+  const content = (
+      <section className={`onboarding-panel ${embedded ? 'embedded' : ''}`}>
+        <div className="brand-mark"><Utensils /></div>
+        <h1>Crea tu primera semana</h1>
+        <p>Perfil en español, unidades métricas y macros editables antes de guardar.</p>
+        <form onSubmit={submit}>
+          <div className="field-grid">
+            <label>Nombre<input name="name" defaultValue="Yo" required /></label>
+            <label>Peso actual (kg)<input name="weightKg" type="number" defaultValue="78" required /></label>
+            <label>Peso objetivo (kg)<input name="targetWeightKg" type="number" defaultValue="74" required /></label>
+            <label>Altura (cm)<input name="heightCm" type="number" defaultValue="178" required /></label>
+            <label>Edad opcional<input name="age" type="number" placeholder="Opcional" /></label>
+            <label>Sexo opcional<select name="sex" defaultValue="skipped"><option value="skipped">Prefiero omitir</option><option value="male">Masculino</option><option value="female">Femenino</option></select></label>
+            <label>Actividad<select name="activityLevel" defaultValue="lightly_active">{Object.entries(activityLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label>Objetivo<select name="goal" defaultValue="cut"><option value="maintain">Mantener</option><option value="cut">Cortar</option><option value="bulk">Volumen</option></select></label>
+            <label>Modo macro<select name="macroMode" value={macroMode} onChange={(event) => setMacroMode(event.target.value)}><option value="balanced">Equilibrado sugerido</option><option value="high_protein">Alto en proteína sugerido</option><option value="lower_carb">Bajo en carbohidratos sugerido</option><option value="manual">Manual</option></select></label>
+          </div>
+          {macroMode === 'manual' && (
+            <div className="field-grid manual-targets">
+              <label>Calorías<input name="manualCalories" type="number" defaultValue="2150" required /></label>
+              <label>Proteína (g)<input name="manualProteinG" type="number" defaultValue="135" required /></label>
+              <label>Carbos (g)<input name="manualCarbsG" type="number" defaultValue="250" required /></label>
+              <label>Grasa (g)<input name="manualFatG" type="number" defaultValue="70" required /></label>
+            </div>
+          )}
+          <label>Me gusta<input name="likes" placeholder="salmón, arroz, yogur" /></label>
+          <label>No me gusta<input name="dislikes" placeholder="brócoli, atún..." /></label>
+          <label>Prohibidos<input name="bannedFoods" placeholder="ingredientes separados por coma" /></label>
+          <label className="checkline"><input type="checkbox" checked={rough} onChange={(event) => setRough(event.target.checked)} /> Acepto estimaciones aproximadas si omito edad o sexo.</label>
+          {error && <p className="error">{error}</p>}
+          <button className="primary"><Sparkles /> Generar primera semana</button>
+        </form>
+      </section>
+  )
+  return embedded ? content : <main className="onboarding">{content}</main>
+}
+
+function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state: AppState; busy: string | null; onSelectMeal: (meal: Meal) => void; onEditMeal: (meal: Meal) => void; onAction: (payload: any) => Promise<any> }) {
+  const menu = state.currentMenu
+  if (!menu) return <EmptyState title="Sin menú" body="Genera una semana desde el perfil." />
+  return (
+    <div className="week-screen">
+      <section className="summary-band">
+        <div>
+          <p className="tiny">Semana desde {formatDate(menu.weekStart)}</p>
+          <h2>{Math.round(menu.nutrition.calories / 7)} kcal/día</h2>
+          <p>{Math.round(menu.nutrition.proteinG / 7)}g proteína · {Math.round(menu.nutrition.carbsG / 7)}g carbos · {Math.round(menu.nutrition.fatG / 7)}g grasa</p>
+        </div>
+        <button className="secondary" disabled={busy === 'regenerateWeek'} onClick={() => onAction({ action: 'regenerateWeek', menuId: menu.id, profileId: state.activeProfile?.id })}><RefreshCw /> Regenerar</button>
+      </section>
+      <section className="target-strip">
+        <span>Objetivo: {menu.target.calories} kcal</span>
+        <span>Proteína mín. {menu.target.proteinG}g</span>
+        <span>Confianza {menu.target.confidence}</span>
+      </section>
+      <div className="day-list">
+        {menu.days.map((day) => (
+          <section key={day.id} className="day-section">
+            <div className="day-header">
+              <h3>{dayNames[day.dayIndex]}</h3>
+              <div>
+                <button className="icon-button" onClick={() => onAction({ action: 'lockDay', dayPlanId: day.id, locked: !day.locked, profileId: state.activeProfile?.id })}>{day.locked ? <Lock /> : <Unlock />}</button>
+                <button className="icon-button" onClick={() => onAction({ action: 'regenerateDay', dayPlanId: day.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
+              </div>
+            </div>
+            <div className="meal-list">
+              {day.meals.map((meal) => (
+                <article key={meal.id} className="meal-row">
+                  <button className="meal-main" onClick={() => onSelectMeal(meal)}>
+                    <span className="slot">{slotLabels[meal.slot]}</span>
+                    <strong>{meal.recipe.title}</strong>
+                    <small>{meal.nutrition.calories} kcal · {meal.nutrition.proteinG}g P · {meal.recipe.prepTimeMinutes} min · {meal.nutrition.confidence}</small>
+                  </button>
+                  <div className="row-actions">
+                    <button className="icon-button" onClick={() => onAction({ action: 'lockMeal', menuMealId: meal.id, locked: !meal.locked, profileId: state.activeProfile?.id })}>{meal.locked ? <Lock /> : <Unlock />}</button>
+                    <button className="icon-button" onClick={() => onEditMeal(meal)}><Sparkles /></button>
+                    <button className="icon-button" onClick={() => onAction({ action: 'regenerateMeal', menuMealId: meal.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal; profileId: string; onClose: () => void; onAction: (payload: any) => Promise<any>; onEdit: () => void }) {
+  return (
+    <Modal title={meal.recipe.title} onClose={onClose}>
+      <div className="meal-detail">
+        <div className="macro-grid">
+          <Metric label="kcal" value={meal.nutrition.calories} />
+          <Metric label="proteína" value={`${meal.nutrition.proteinG}g`} />
+          <Metric label="carbos" value={`${meal.nutrition.carbsG}g`} />
+          <Metric label="grasa" value={`${meal.nutrition.fatG}g`} />
+        </div>
+        <p>{meal.recipe.description}</p>
+        <div className="detail-actions">
+          <button className="secondary" onClick={() => onAction({ action: 'starRecipe', profileId, recipeId: meal.recipe.id })}><Star /> Guardar</button>
+          <button className="secondary" onClick={() => onAction({ action: 'lockMeal', profileId, menuMealId: meal.id, locked: !meal.locked })}>{meal.locked ? <Unlock /> : <Lock />} {meal.locked ? 'Desbloquear' : 'Bloquear'}</button>
+          <button className="primary" onClick={onEdit}><Sparkles /> Editar</button>
+        </div>
+        <h3>Ingredientes</h3>
+        <ul className="ingredient-list">{meal.recipe.ingredients.map((item) => <li key={item.id}><span>{item.name}</span><small>{item.amount} {item.unit} · {item.confidence}</small></li>)}</ul>
+        <h3>Pasos</h3>
+        <ol className="steps">{meal.recipe.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>
+      </div>
+    </Modal>
+  )
+}
+
+function RecipesScreen({ state, onAction }: { state: AppState; onAction: (payload: any) => Promise<any> }) {
+  if (state.savedRecipes.length === 0) return <EmptyState title="Sin recetas guardadas" body="Marca una receta con la estrella para verla aquí." />
+  return <div className="simple-list">{state.savedRecipes.map((item) => <article key={item.savedRecipeId} className="saved-row"><Star /><span><strong>{item.recipe.title}</strong><small>{item.recipe.nutrition.calories} kcal · {item.recipe.prepTimeMinutes} min</small></span><button className="icon-button" onClick={() => onAction({ action: 'unstarRecipe', savedRecipeId: item.savedRecipeId, profileId: state.activeProfile?.id })}><X /></button></article>)}</div>
+}
+
+function HistoryScreen({ state }: { state: AppState }) {
+  if (state.history.length === 0) return <EmptyState title="Sin historial" body="Los menús generados aparecerán aquí con sus snapshots." />
+  return <div className="simple-list">{state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · snapshot preservado</small></span></article>)}</div>
+}
+
+function ProfileScreen({ state, onSwitch, onCreate }: { state: AppState; onSwitch: (id: string) => void; onCreate: () => void }) {
+  const profile = state.activeProfile!
+  return (
+    <section className="profile-screen">
+      <h2>Perfil</h2>
+      <div className="profile-switcher">
+        {state.profiles.map((item) => <button key={item.id} className={item.id === profile.id ? 'selected' : ''} onClick={() => onSwitch(item.id)}>{item.name}</button>)}
+        <button onClick={onCreate}>Nuevo perfil</button>
+      </div>
+      <div className="profile-facts">
+        <Metric label="objetivo" value={profile.goal === 'cut' ? 'Corte' : profile.goal === 'bulk' ? 'Volumen' : 'Mantener'} />
+        <Metric label="actividad" value={activityLabels[profile.activityLevel] ?? profile.activityLevel} />
+        <Metric label="peso cálculo proteína" value={`${profile.proteinCalculationWeightKg} kg`} />
+        <Metric label="idioma" value={profile.locale} />
+      </div>
+      <div className="preference-lines">
+        <p><strong>Me gusta:</strong> {profile.likes.join(', ') || 'Sin datos'}</p>
+        <p><strong>No me gusta:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
+        <p><strong>Prohibidos:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
+      </div>
+    </section>
+  )
+}
+
+function NavButton({ active, icon, label, onClick }: { active: boolean; icon: React.ReactNode; label: string; onClick: () => void }) {
+  return <button className={active ? 'active' : ''} onClick={onClick}>{icon}<span>{label}</span></button>
+}
+
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return <div className="modal-backdrop"><section className="modal"><header><h2>{title}</h2><button className="icon-button" onClick={onClose}><X /></button></header>{children}</section></div>
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return <div className="metric"><strong>{value}</strong><span>{label}</span></div>
+}
+
+function NutritionDelta({ delta }: { delta: Nutrition }) {
+  return <small className="delta">{delta.calories > 0 ? '+' : ''}{delta.calories} kcal · {delta.proteinG > 0 ? '+' : ''}{delta.proteinG}g P</small>
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return <section className="empty"><Apple /><h2>{title}</h2><p>{body}</p></section>
+}
+
+function LoadingScreen() {
+  return <main className="loading"><Sparkles /><p>Cargando MenuMaker...</p></main>
+}
+
+function splitList(value: string): string[] {
+  return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat('es-ES', { day: 'numeric', month: 'short' }).format(new Date(value))
+}
+
+function proposalLabel(kind: string): string {
+  if (kind === 'closest_nutrition') return 'Más parecido en macros'
+  if (kind === 'macro_optimized') return 'Optimizado para macros'
+  return 'Más creativo y rico'
+}

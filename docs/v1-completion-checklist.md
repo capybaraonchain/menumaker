@@ -1,0 +1,258 @@
+# V1 Completion Checklist
+
+## How To Use This Checklist
+
+This checklist is the completion contract for the first working local v1.
+
+An item is complete only when the behavior works locally, not merely when files or placeholder UI exist. If an item cannot be completed, mark it as blocked or explicitly deferred with the reason.
+
+## 1. Local Runtime
+
+- [x] App runs locally on the user's MacBook Air M2.
+- [x] Local database starts or is reachable.
+- [x] Web app opens in a browser.
+- [x] API/server routes respond locally.
+- [x] MCP server can start locally.
+- [x] No cloud deployment is required.
+- [x] No hosted auth/account system is required.
+- [x] A single local user stub is used while preserving `user_id` ownership fields.
+
+## 2. Monorepo And Tooling
+
+- [x] Monorepo structure exists: `apps/web`, `apps/mcp`, `packages/core`, `packages/db`, `packages/nutrition`, `packages/ai`.
+- [x] TypeScript is configured.
+- [x] Shared package imports work.
+- [x] Typecheck passes.
+- [x] Equivalent static checks run through workspace typecheck and production build. A separate lint script is not configured in v1.
+- [x] Local environment variables are documented.
+
+## 3. Database And Persistence
+
+- [x] Drizzle schema exists.
+- [x] Migrations create all v1 tables.
+- [x] Profiles persist.
+- [x] Macro targets persist as snapshots.
+- [x] Weekly menus persist.
+- [x] Day plans persist.
+- [x] Menu meals persist.
+- [x] Recipes persist.
+- [x] Recipe ingredients persist.
+- [x] Nutrition records persist.
+- [x] Ingredient matches persist.
+- [x] Nutrition estimates persist.
+- [x] Preferences persist.
+- [x] Saved recipes persist.
+- [x] Generation jobs persist.
+- [x] AI cache persists.
+
+## 4. Spanish-First Onboarding
+
+- [x] New profile defaults to Spanish.
+- [x] Metric units are default.
+- [x] Onboarding asks for profile name.
+- [x] Onboarding asks for current weight.
+- [x] Onboarding asks for target weight.
+- [x] Onboarding asks for height.
+- [x] Onboarding allows age to be skipped.
+- [x] Onboarding allows biological sex to be skipped.
+- [x] Onboarding defaults activity to lightly active.
+- [x] Activity choices are explained.
+- [x] Onboarding asks maintain/cut/bulk.
+- [x] Onboarding asks balanced/high-protein/lower-carb/manual.
+- [x] Onboarding collects likes, dislikes, and banned foods.
+- [x] Onboarding ends by generating or starting generation of the first weekly menu.
+
+## 5. Macro Target Policy
+
+- [x] Mifflin-St Jeor calculation is implemented.
+- [x] Activity multipliers are implemented: `1.4`, `1.5`, `1.6`, `1.8`, `2.0`.
+- [x] New profiles default to `1.5` lightly active.
+- [x] Maintain uses estimated TDEE.
+- [x] Cut uses conservative/standard/aggressive deficit presets.
+- [x] Bulk uses conservative/standard/aggressive surplus presets.
+- [x] Protein calculation weight heuristic is implemented.
+- [x] Protein defaults are implemented.
+- [x] Fat floor is implemented.
+- [x] Lower-carb cap is implemented.
+- [x] Suggested targets are rounded.
+- [x] Suggested targets are editable before saving.
+- [x] Skipped age/sex requires accepting a rough estimate.
+- [x] Under-18 automatic suggestions are disabled.
+- [x] Impossible targets are detected before generation.
+- [x] Spanish impossible-target copy is shown.
+
+## 6. Nutrition Matching And Calculation
+
+- [x] Recipes use structured ingredient lines.
+- [x] Ingredient quantities can be normalized to grams/ml where possible.
+- [x] Seed nutrition dataset exists for local v1.
+- [x] Ingredient aliases work in Spanish and English.
+- [x] Ingredient matching returns confidence labels.
+- [x] Per-ingredient nutrition is calculated.
+- [x] Per-recipe nutrition is calculated.
+- [x] Per-meal nutrition snapshots are saved.
+- [x] Recipe confidence accounts for meaningful calorie-contributing ingredients.
+- [x] AI-estimated nutrition is visibly marked as estimated.
+- [x] Historical nutrition snapshots do not silently change.
+
+## 7. LLM Provider
+
+- [x] Server-side Codex OAuth provider adapter exists in `packages/ai`.
+- [x] `CODEX_AUTH_PROFILE` is supported.
+- [x] Default auth path is `~/.codex/auth.json`.
+- [x] Tokens are refreshed server-side.
+- [x] Tokens are never sent to the browser.
+- [x] Provider status redacts token values.
+- [x] Default model is `gpt-5.5`.
+- [x] Default reasoning effort is `medium`.
+- [x] Structured generation validates outputs before use.
+- [x] Provider errors are redacted.
+
+## 8. AI Planning Pipeline
+
+- [x] `PlanningBrief` schema exists.
+- [x] `WeekSkeleton` schema exists.
+- [x] `RecipeCandidate` schema exists.
+- [x] `MealReplacementProposal` schema exists.
+- [x] `RepairRequest` schema exists.
+- [x] `RepairResult` schema exists.
+- [x] `GenerationSummary` schema exists.
+- [x] Generation jobs have persisted status and logs. Rich async progress UI is deferred in Section 12.
+- [x] Week skeleton generation or assembly exists.
+- [x] Recipe candidate generation exists.
+- [x] Ingredient matching runs before finalization.
+- [x] Deterministic menu scoring exists.
+- [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
+- [x] Failure states are explicit in domain schemas and job storage.
+- [x] Completed weekly menu is saved as structured rows.
+
+## 9. Semana Screen
+
+- [x] `Semana` is the primary screen after onboarding.
+- [x] Selected profile is visible.
+- [x] Week range is visible.
+- [x] Daily calories/macros are visible.
+- [x] Weekly target progress is visible.
+- [x] Seven days are visible.
+- [x] Breakfast, lunch, dinner, and snack are visible for each day.
+- [x] Day lock control exists.
+- [x] Meal lock control exists.
+- [x] Meal regeneration control exists.
+- [x] Day regeneration control exists.
+- [x] Week regeneration control exists.
+- [x] Nutrition confidence indicators appear when relevant.
+
+## 10. Meal Detail And Editing
+
+- [x] Meal detail shows recipe title.
+- [x] Meal detail shows calories and macros.
+- [x] Meal detail shows nutrition confidence.
+- [x] Meal detail shows prep time.
+- [x] Meal detail shows ingredients.
+- [x] Meal detail shows steps.
+- [x] Meal detail can star recipe.
+- [x] Meal detail can lock meal.
+- [x] Meal edit accepts natural-language request.
+- [x] Meal edit shows three replacement options.
+- [x] Replacement options include closest nutrition, creative/delicious, and macro-optimized.
+- [x] Replacement options show macro/calorie impact.
+- [x] Selecting a replacement updates the meal.
+- [x] Related replacement opportunities are detected.
+- [x] Week-wide propagation requires confirmation.
+- [x] Saving as profile preference requires confirmation.
+
+## 11. Locks, Stars, And History
+
+- [x] Individual meals can be locked/unlocked.
+- [x] Entire days can be locked/unlocked.
+- [x] Locked meals are preserved during regeneration.
+- [x] Locked days are preserved during regeneration.
+- [x] Recipes can be starred.
+- [x] Recipes can be unstarred.
+- [x] Starred recipes appear in `Recetas`.
+- [x] Prior weekly menus appear in `Historial`.
+- [x] Old menus preserve their original target/nutrition snapshots.
+
+## 12. Generation Progress And Failures
+
+Local v1 generation is synchronous enough that a full async progress surface would add more machinery than value. Generation jobs still persist status, logs, result, failure code, and error fields. The rich progress UI and dedicated failure screens below are explicitly deferred beyond the first working local app, except impossible-target errors, which are shown during onboarding/macro calculation.
+
+- [x] Deferred: rich UI shows generation progress.
+- [x] Deferred: progress includes week skeleton/building state.
+- [x] Deferred: progress includes recipe generation state.
+- [x] Deferred: progress includes nutrition matching state.
+- [x] Deferred: progress includes balancing state.
+- [x] Deferred: progress includes finalizing state.
+- [x] Impossible targets failure is visible and actionable.
+- [x] Deferred: dedicated low nutrition confidence failure screen. The failure code exists.
+- [x] Deferred: dedicated ambiguous ingredient failure screen. The failure code exists.
+- [x] Deferred: dedicated banned-item conflict failure screen. The failure code exists.
+- [x] Deferred: dedicated generation-exhausted failure screen. The failure code exists.
+
+## 13. In-App Chat
+
+- [x] Chat is available in the app.
+- [x] Chat uses active profile context.
+- [x] Chat can inspect current menu context.
+- [x] Chat can explain macros and tradeoffs.
+- [x] Chat can propose meal changes.
+- [x] Chat does not silently mutate profile preferences.
+- [x] Chat does not silently mutate weekly menus.
+- [x] Chat does not silently mutate locks or starred recipes.
+
+## 14. MCP Server And Skill
+
+- [x] MCP server starts locally.
+- [x] Read-only tools exist.
+- [x] Proposal tools exist.
+- [x] Mutation tools exist.
+- [x] `list_profiles` works.
+- [x] `get_profile` works.
+- [x] `get_weekly_menu` works.
+- [x] `analyze_recipe_nutrition` works.
+- [x] `suggest_meal_replacements` works.
+- [x] Mutation tools preserve locks and product rules.
+- [x] Broad/persistent MCP changes require confirmation.
+- [x] Companion skill exists.
+- [x] Skill instructs agents to use deterministic nutrition before macro claims.
+- [x] Skill instructs agents to respect profile locale.
+- [x] Skill instructs agents to preserve locks.
+- [x] Skill discourages pantry, grocery, and medical-diet expansion.
+
+## 15. End-To-End Verification Scenario
+
+- [x] Start local database and app.
+- [x] Open the web app locally.
+- [x] Create a Spanish profile.
+- [x] Choose cut or bulk.
+- [x] Review and save suggested macros.
+- [x] Generate a weekly menu.
+- [x] Confirm breakfast/lunch/dinner/snack exist for all seven days.
+- [x] Confirm menu nutrition is calculated from ingredients.
+- [x] Lock one meal.
+- [x] Regenerate the week.
+- [x] Confirm locked meal is unchanged.
+- [x] Edit one meal with a natural-language request.
+- [x] Select a replacement.
+- [x] Confirm macro impact is shown.
+- [x] Star one recipe.
+- [x] Confirm recipe appears in `Recetas`.
+- [x] Confirm old/current menu appears in `Historial`.
+- [x] Ask chat about the current menu.
+- [x] Use MCP to inspect profile and menu.
+
+## Explicitly Deferred
+
+- [x] Pantry inventory is deferred.
+- [x] Grocery list generation is deferred.
+- [x] Store pricing is deferred.
+- [x] Budget optimization is deferred.
+- [x] Clinical nutrition guidance is deferred.
+- [x] Medical-diet programs are deferred.
+- [x] Eating-disorder screening is deferred.
+- [x] Medication-specific recommendations are deferred.
+- [x] Multi-profile shared meals are deferred.
+- [x] Hosted auth is deferred.
+- [x] Hosted sync is deferred.
+- [x] Full nutrition-source coverage is deferred beyond the local v1 seed and adapter boundaries.
+- [x] Full async AI planning and repair orchestration UI is deferred beyond the local v1 deterministic pipeline.
