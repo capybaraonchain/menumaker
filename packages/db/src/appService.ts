@@ -32,7 +32,7 @@ import {
   type WeekSkeleton,
   type WeekSkeletonMeal,
 } from '@menumaker/core'
-import { normalizeIngredientName, scoreRecipe, seedFoods, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
+import { normalizeIngredientName, scoreRecipe, seedFoods, sumNutrition, templatesForSlot, type NutritionFood } from '@menumaker/nutrition'
 import {
   buildCalorieAdjustmentPlan,
   currentMenuHash,
@@ -1631,6 +1631,7 @@ export async function previewCalorieAdjustmentPlan(profileId: string, calories: 
   if (conflict.impossible) throw new Error(conflict.messageEs)
   const profile = (await listProfiles()).find((item) => item.id === profileId)
   if (!profile) throw new Error('Perfil no encontrado.')
+  const nutritionCatalog = await nutritionCatalogForScoring()
   const savedRecipeIds = (await getSavedRecipes(profileId)).map((item) => item.recipe.id)
   const replacementCandidatesBySlot: Partial<Record<MealSlot, RecipeCandidate[]>> = {}
   for (const slot of mealSlots) {
@@ -1658,6 +1659,7 @@ export async function previewCalorieAdjustmentPlan(profileId: string, calories: 
     target,
     savedRecipeIds,
     replacementCandidatesBySlot,
+    nutritionCatalog,
   })
 }
 
@@ -1961,7 +1963,7 @@ async function createWeeklyMenuFromCalorieAdjustmentPlan(
     for (const decision of dayDecisions) {
       const recipeId = decision.kind === 'preserve_locked' && decision.existingRecipeId
         ? decision.existingRecipeId
-        : await persistRecipe(scoreRecipe(decision.recipe, profile.bannedFoods), decision.kind)
+        : await persistRecipe(await scoreRecipeWithUserMappings(decision.recipe, profile.bannedFoods), decision.kind)
       await sql`
         insert into menu_meals (user_id, day_plan_id, recipe_id, slot, locked, nutrition_snapshot)
         values (${localUserId()}, ${day.id}, ${recipeId}, ${decision.slot}, ${decision.locked}, ${sql.json(decision.nutrition as any)})
@@ -2044,7 +2046,7 @@ async function updateCurrentMenuFromRegenerationPlan(
 async function recipeIdForRegenerationDecision(profile: ProfileRow, decision: RegenerationDecision): Promise<string> {
   if (decision.kind === 'preserve_locked' && decision.existingRecipeId) return decision.existingRecipeId
   const source = decision.source === 'llm' ? 'llm_regenerated' : 'template_regenerated'
-  return persistRecipe(scoreRecipe(decision.recipe, profile.bannedFoods), source)
+  return persistRecipe(await scoreRecipeWithUserMappings(decision.recipe, profile.bannedFoods), source)
 }
 
 async function replacementDecisionForMeal(
@@ -2477,6 +2479,7 @@ async function recipePoolForSlot(input: {
 }): Promise<RecipePoolResult> {
   const avoidFoods = unique([...input.profile.bannedFoods, ...input.profile.dislikes, ...input.avoidFoods])
   const ingredientMappings = await ingredientMappingsForUser()
+  const nutritionCatalog = await nutritionCatalogForScoring()
   const generationInput: RecipeGenerationInput = {
     locale: input.profile.locale,
     slot: input.slot,
@@ -2490,7 +2493,7 @@ async function recipePoolForSlot(input: {
     userRequest: input.userRequest,
     targetNutrition: input.targetNutrition,
     menuContext: input.menuContext,
-    allowedIngredients: seedFoods.flatMap((food) => food.aliases.slice(0, 2)),
+    allowedIngredients: nutritionCatalog.flatMap((food) => food.aliases.slice(0, 2)),
   }
   const llmResult = await generateRecipeCandidatesCached(generationInput)
   const llmRecipes = scoreGeneratedCandidates({
@@ -2501,6 +2504,7 @@ async function recipePoolForSlot(input: {
     source: 'llm',
     limit: input.count,
     ingredientMappings,
+    nutritionCatalog,
   })
   if (llmRecipes.length >= Math.min(input.count, 3)) {
     return {
@@ -2538,6 +2542,7 @@ async function recipePoolForSlot(input: {
     source: 'template',
     limit: input.count,
     ingredientMappings,
+    nutritionCatalog,
   })
   const seen = new Set(llmRecipes.map((item) => normalizeIngredientName(item.recipe.title)))
   const merged = [
@@ -2719,9 +2724,64 @@ function resolveSeedFood(value: string) {
   }) ?? null
 }
 
+async function nutritionCatalogForScoring(): Promise<NutritionFood[]> {
+  const sql = sqlClient()
+  const rows = await sql<Array<{
+    food_id: string
+    canonical_name: string
+    category: string
+    source_id: string
+    source: string
+    payload: any
+    per_100g: any
+    confidence: string
+    aliases: string[] | null
+  }>>`
+    select distinct on (fi.id)
+      fi.id as food_id,
+      fi.canonical_name,
+      fi.category,
+      sf.id as source_id,
+      sf.source,
+      sf.payload,
+      nr.per_100g,
+      nr.confidence,
+      coalesce(array_agg(distinct fa.alias) filter (where fa.alias is not null), '{}') as aliases
+    from food_items fi
+    join nutrition_records nr on nr.food_id = fi.id
+    join source_foods sf on sf.id = nr.source_id
+    left join food_aliases fa on fa.food_id = fi.id and (fa.user_id is null or fa.user_id = ${localUserId()})
+    group by fi.id, fi.canonical_name, fi.category, sf.id, sf.source, sf.payload, nr.per_100g, nr.confidence
+    order by fi.id, case when sf.source = 'seed' then 1 else 0 end, sf.id
+  `
+  if (rows.length === 0) return seedFoods
+  return rows.map((row) => ({
+    id: row.food_id,
+    canonicalName: row.canonical_name,
+    aliases: unique([row.canonical_name, ...(row.aliases ?? [])]),
+    category: row.category,
+    source: row.source,
+    sourceId: row.source_id,
+    confidence: nutritionConfidence(row.confidence),
+    per100g: {
+      calories: Number(row.per_100g?.calories ?? 0),
+      proteinG: Number(row.per_100g?.proteinG ?? 0),
+      carbsG: Number(row.per_100g?.carbsG ?? 0),
+      fatG: Number(row.per_100g?.fatG ?? 0),
+      fiberG: row.per_100g?.fiberG === undefined ? undefined : Number(row.per_100g.fiberG),
+    },
+    householdUnits: Array.isArray(row.payload?.householdUnits) ? row.payload.householdUnits : undefined,
+  }))
+}
+
+function nutritionConfidence(value: string): NutritionFood['confidence'] {
+  return ['exact', 'barcode', 'database', 'generic', 'estimated', 'unknown'].includes(value) ? value as NutritionFood['confidence'] : 'unknown'
+}
+
 async function scoreRecipeWithUserMappings(recipe: RecipeCandidate, bannedFoods: string[] = []) {
   const mappings = await ingredientMappingsForUser()
-  return scoreRecipe(applyIngredientMappingsToRecipe(recipe, mappings), bannedFoods)
+  const catalog = await nutritionCatalogForScoring()
+  return scoreRecipe(applyIngredientMappingsToRecipe(recipe, mappings), bannedFoods, catalog)
 }
 
 function scoreGeneratedCandidates(input: {
@@ -2732,6 +2792,7 @@ function scoreGeneratedCandidates(input: {
   source: 'llm' | 'template'
   limit: number
   ingredientMappings?: IngredientAliasMapping[]
+  nutritionCatalog?: NutritionFood[]
 }): GeneratedScoredRecipe[] {
   const avoidedTitles = new Set(input.avoidTitles.map(normalizeIngredientName))
   const seen = new Set<string>()
@@ -2744,10 +2805,10 @@ function scoreGeneratedCandidates(input: {
     const mappedCandidate = applyIngredientMappingsToRecipe(candidate, input.ingredientMappings ?? [])
     if (recipeIncludesAny(mappedCandidate, input.avoidedFoods)) continue
 
-    const raw = scoreRecipe(mappedCandidate, input.avoidedFoods)
+    const raw = scoreRecipe(mappedCandidate, input.avoidedFoods, input.nutritionCatalog)
     if (hasUnknownIngredients(raw)) continue
     const factor = clamp(input.targetNutrition.calories / Math.max(raw.nutrition.calories, 1), 0.72, 1.28)
-    const scaled = scoreRecipe(scaleRecipe(mappedCandidate, factor), input.avoidedFoods)
+    const scaled = scoreRecipe(scaleRecipe(mappedCandidate, factor), input.avoidedFoods, input.nutritionCatalog)
     if (hasUnknownIngredients(scaled)) continue
     scored.push({
       recipe: scaled,
@@ -3550,6 +3611,7 @@ async function rankReplacementCandidates(input: {
     .filter((meal) => meal.id !== input.meal.id)
     .map((meal) => normalizeIngredientName(meal.recipe.title)))
   const selected = new Map<string, ReplacementRankedCandidate>()
+  const nutritionCatalog = await nutritionCatalogForScoring()
   const pool = await recipePoolForSlot({
     profile: input.profile,
     slot: input.meal.slot,
@@ -3570,14 +3632,14 @@ async function rankReplacementCandidates(input: {
     if (selected.has(title)) continue
     if (recipeIncludesAny(candidate, input.avoidedFoods)) continue
 
-    const raw = scoreRecipe(candidate, input.avoidedFoods)
+    const raw = scoreRecipe(candidate, input.avoidedFoods, nutritionCatalog)
     if (raw.nutrition.confidence === 'unknown') continue
     const currentTargetCalories = input.meal.nutrition.calories
     const slotTargetCalories = input.menu.target.calories * replacementSlotShares[input.meal.slot]
     const targetCalories = currentTargetCalories * 0.72 + slotTargetCalories * 0.28
     const factor = clamp(targetCalories / Math.max(raw.nutrition.calories, 1), 0.72, 1.28)
     const recipe = scaleRecipe(candidate, factor)
-    const scored = scoreRecipe(recipe, input.avoidedFoods)
+    const scored = scoreRecipe(recipe, input.avoidedFoods, nutritionCatalog)
     if (scored.nutrition.confidence === 'unknown') continue
     if (recipeIncludesAny(scored, input.avoidedFoods)) continue
 

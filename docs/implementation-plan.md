@@ -98,6 +98,8 @@ Acceptance:
 - User-owned rows include ownership fields compatible with hosted sync later.
 - Generated-output tables, including AI cache, are scoped by `user_id`.
 - Schema ownership tests prevent adding user-owned tables without direct local ownership coverage.
+- Nutrition source tables have idempotent `(food_id, source_id)` records and can be populated through `npm --workspace @menumaker/db run nutrition:import -- ./foods.json`.
+- App scoring reads the source-backed nutrition catalog from Postgres; seed foods remain the fallback baseline when no source records exist.
 
 ## Phase 2: Core Domain And Macro Policy
 
@@ -267,6 +269,8 @@ The planner should:
 - Save a finalized weekly menu.
 
 The local deterministic recipe set is a fallback for unavailable or failed LLM generation, not the normal source of weekly menus or replacements.
+
+Nutrition source records are similarly not a mock-only schema. Local v1 can import normalized BEDCA/USDA/Open Food Facts-style JSON records into `source_foods`, `nutrition_records`, and `food_mappings`; generation, meal editing, and calorie adjustment then score against that database catalog. The seed catalog remains a baseline for local setup and tests.
 
 Acceptance:
 

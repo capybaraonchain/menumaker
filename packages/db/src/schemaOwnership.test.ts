@@ -43,3 +43,16 @@ test('ai cache is scoped by user in migration and service queries', () => {
   assert.match(appService, /insert into ai_cache \(user_id, input_hash, model, schema_version, output\)/)
   assert.match(appService, /delete from ai_cache where user_id = \$\{localUserId\(\)\}/)
 })
+
+test('app scoring reads nutrition source tables before falling back to seed foods', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const seed = readFileSync(resolve(root, 'packages/db/src/seed.ts'), 'utf8')
+  const migration = readFileSync(resolve(root, 'packages/db/src/migrate.ts'), 'utf8')
+
+  assert.match(appService, /async function nutritionCatalogForScoring\(\)/)
+  assert.match(appService, /join nutrition_records nr on nr\.food_id = fi\.id/)
+  assert.match(appService, /join source_foods sf on sf\.id = nr\.source_id/)
+  assert.match(appService, /scoreRecipe\(mappedCandidate, input\.avoidedFoods, input\.nutritionCatalog\)/)
+  assert.match(seed, /on conflict \(food_id, source_id\) do update set/)
+  assert.match(migration, /nutrition_records_food_source_idx/)
+})

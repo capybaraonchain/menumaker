@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { calculateIngredientNutrition, scoreRecipe } from './engine'
+import { calculateIngredientNutrition, scoreRecipe, type NutritionFood } from './engine'
 
 test('uses food-specific unit conversions for ambiguous household units', () => {
   const eggs = calculateIngredientNutrition({ name: 'huevos', amount: 2, unit: 'unidad' })
@@ -56,4 +56,26 @@ test('broader deterministic food catalog validates common LLM-style recipes', ()
   ])
   assert.ok(recipe.nutrition.calories > 550)
   assert.ok(recipe.nutrition.proteinG > 25)
+})
+
+test('can score against an imported source catalog instead of seed-only foods', () => {
+  const catalog: NutritionFood[] = [{
+    id: 'skyr_natural',
+    canonicalName: 'skyr natural',
+    aliases: ['skyr', 'skyr natural'],
+    category: 'protein',
+    source: 'bedca',
+    sourceId: 'bedca:skyr-natural',
+    confidence: 'database',
+    per100g: { calories: 63, proteinG: 11, carbsG: 4, fatG: 0.2 },
+    householdUnits: [
+      { units: ['vaso', 'unidad'], grams: 150, confidence: 'database', note: 'Vaso de skyr natural.' },
+    ],
+  }]
+
+  const ingredient = calculateIngredientNutrition({ name: 'skyr', amount: 1, unit: 'vaso' }, [], catalog)
+  assert.equal(ingredient.foodId, 'skyr_natural')
+  assert.equal(ingredient.sourceId, 'bedca:skyr-natural')
+  assert.equal(ingredient.normalizedAmount, 150)
+  assert.equal(ingredient.nutrition.proteinG, 16.5)
 })

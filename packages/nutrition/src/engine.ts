@@ -1,6 +1,11 @@
 import type { IngredientLine, MatchedIngredient, NutritionConfidence, NutritionTotals, RecipeCandidate, ScoredRecipe } from '@menumaker/core'
 import { seedFoods, type SeedFood } from './seedFoods'
 
+export interface NutritionFood extends Omit<SeedFood, 'source'> {
+  source: string
+  sourceId?: string
+}
+
 const genericUnitToGram: Record<string, { grams: number; confidence: NutritionConfidence; note: string }> = {
   g: { grams: 1, confidence: 'database', note: 'Gramos.' },
   gr: { grams: 1, confidence: 'database', note: 'Gramos.' },
@@ -41,13 +46,13 @@ export function normalizeIngredientName(value: string): string {
     .trim()
 }
 
-export function matchFood(name: string, bannedFoods: string[] = []): SeedFood | null {
+export function matchFood(name: string, bannedFoods: string[] = [], catalog: NutritionFood[] = seedFoods): NutritionFood | null {
   const normalized = normalizeIngredientName(name)
   const banned = bannedFoods.map(normalizeIngredientName)
   if (banned.some((item) => normalized.includes(item))) return null
 
-  let best: { food: SeedFood; score: number } | null = null
-  for (const food of seedFoods) {
+  let best: { food: NutritionFood; score: number } | null = null
+  for (const food of catalog) {
     for (const alias of food.aliases) {
       const normalizedAlias = normalizeIngredientName(alias)
       const score = normalized === normalizedAlias ? 100 : normalized.includes(normalizedAlias) || normalizedAlias.includes(normalized) ? 80 : 0
@@ -57,7 +62,7 @@ export function matchFood(name: string, bannedFoods: string[] = []): SeedFood | 
   return best && best.score >= 80 ? best.food : null
 }
 
-export function normalizeAmount(line: IngredientLine, food?: SeedFood | null): { amount: number; unit: 'g' | 'ml'; confidence: NutritionConfidence; notes: string[] } {
+export function normalizeAmount(line: IngredientLine, food?: NutritionFood | null): { amount: number; unit: 'g' | 'ml'; confidence: NutritionConfidence; notes: string[] } {
   const unit = normalizeIngredientName(line.unit)
   const foodSpecific = foodSpecificUnitConversion(food, unit)
   if (foodSpecific) {
@@ -86,8 +91,8 @@ export function normalizeAmount(line: IngredientLine, food?: SeedFood | null): {
   }
 }
 
-export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: string[] = []): MatchedIngredient {
-  const food = matchFood(line.name, bannedFoods)
+export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: string[] = [], catalog: NutritionFood[] = seedFoods): MatchedIngredient {
+  const food = matchFood(line.name, bannedFoods, catalog)
   const normalized = normalizeAmount(line, food)
 
   if (!food) {
@@ -108,7 +113,7 @@ export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: 
     normalizedAmount: round(normalized.amount),
     normalizedUnit: normalized.unit,
     foodId: food.id,
-    sourceId: `seed:${food.id}`,
+    sourceId: food.sourceId ?? `${food.source}:${food.id}`,
     confidence,
     nutrition: {
       calories: round(food.per100g.calories * multiplier),
@@ -122,7 +127,7 @@ export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: 
   }
 }
 
-function foodSpecificUnitConversion(food: SeedFood | null | undefined, normalizedUnit: string): { grams: number; confidence: NutritionConfidence; note: string } | null {
+function foodSpecificUnitConversion(food: NutritionFood | null | undefined, normalizedUnit: string): { grams: number; confidence: NutritionConfidence; note: string } | null {
   if (!food?.householdUnits) return null
   for (const conversion of food.householdUnits) {
     if (conversion.units.map(normalizeIngredientName).includes(normalizedUnit)) {
@@ -136,8 +141,8 @@ function foodSpecificUnitConversion(food: SeedFood | null | undefined, normalize
   return null
 }
 
-export function scoreRecipe(recipe: RecipeCandidate, bannedFoods: string[] = []): ScoredRecipe {
-  const matchedIngredients = recipe.ingredients.map((ingredient) => calculateIngredientNutrition(ingredient, bannedFoods))
+export function scoreRecipe(recipe: RecipeCandidate, bannedFoods: string[] = [], catalog: NutritionFood[] = seedFoods): ScoredRecipe {
+  const matchedIngredients = recipe.ingredients.map((ingredient) => calculateIngredientNutrition(ingredient, bannedFoods, catalog))
   return {
     ...recipe,
     matchedIngredients,

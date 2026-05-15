@@ -296,6 +296,22 @@ async function main(): Promise<void> {
   await sql`alter table ai_cache alter column user_id set not null`
   await sql`alter table ai_cache drop constraint if exists ai_cache_input_hash_model_schema_version_key`
   await sql`create unique index if not exists ai_cache_user_hash_model_schema_idx on ai_cache(user_id, input_hash, model, schema_version)`
+  await sql`
+    delete from nutrition_records a
+    using nutrition_records b
+    where a.ctid < b.ctid
+      and a.food_id = b.food_id
+      and a.source_id = b.source_id
+  `
+  await sql`
+    delete from food_mappings a
+    using food_mappings b
+    where a.ctid < b.ctid
+      and a.food_id = b.food_id
+      and a.source_id = b.source_id
+  `
+  await sql`create unique index if not exists nutrition_records_food_source_idx on nutrition_records(food_id, source_id)`
+  await sql`create unique index if not exists food_mappings_food_source_idx on food_mappings(food_id, source_id)`
   await closeDb()
   console.log('Database migrated')
 }

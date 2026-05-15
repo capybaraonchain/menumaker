@@ -158,6 +158,14 @@ Nutrition matching uses these tables or equivalent structures:
 
 These refine the broader `food_items`, `nutrition_records`, `recipe_ingredients`, and `nutrition_estimates` tables from ADR 0003.
 
+Local v1 now uses these tables as an active scoring source, not only as future schema. Normalized source records can be imported with:
+
+```bash
+npm --workspace @menumaker/db run nutrition:import -- ./foods.json
+```
+
+The import is idempotent on `(food_id, source_id)`. App scoring builds a nutrition catalog from `food_items`, `food_aliases`, `source_foods`, and `nutrition_records`; non-seed sources are preferred over seed records for the same canonical food. Seed data remains the baseline when no imported source record exists.
+
 ## V1 Source Plan
 
 For v1:
@@ -165,7 +173,7 @@ For v1:
 - Use Open Food Facts for barcode and packaged-product matches.
 - Use USDA FoodData Central for robust generic food coverage.
 - Include a BEDCA adapter boundary.
-- Implement BEDCA if access or import is straightforward.
+- Implement BEDCA if access or import is straightforward. The generic normalized import path exists first; official dataset-specific adapters should emit that format.
 - Use a user confirmation loop for ambiguous ingredients. In local v1 this first lands as alias mapping to an existing deterministic food; later versions can add source-record picking and custom nutrition records.
 - Allow AI fallback only when visibly marked as estimated.
 

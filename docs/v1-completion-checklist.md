@@ -88,6 +88,8 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Recipes use structured ingredient lines.
 - [x] Ingredient quantities can be normalized to grams/ml where possible.
 - [x] Seed nutrition dataset exists for local v1.
+- [x] External/source nutrition records can be imported into `source_foods`, `nutrition_records`, and `food_mappings`.
+- [x] Generation, meal-edit, and calorie-adjustment scoring read the database nutrition catalog before falling back to seed foods.
 - [x] Ingredient aliases work in Spanish and English.
 - [x] User-confirmed ingredient aliases can be saved and reused by the scorer.
 - [x] Ingredient matching returns confidence labels.

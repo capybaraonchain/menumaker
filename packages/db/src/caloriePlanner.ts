@@ -7,7 +7,7 @@ import {
   type NutritionTotals,
   type RecipeCandidate,
 } from '@menumaker/core'
-import { normalizeIngredientName, scoreRecipe, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
+import { normalizeIngredientName, scoreRecipe, sumNutrition, templatesForSlot, type NutritionFood } from '@menumaker/nutrition'
 
 export type CalorieAdjustmentDecisionKind =
   | 'portion_resize'
@@ -138,6 +138,7 @@ export function buildCalorieAdjustmentPlan(input: {
   target: MacroTargets
   savedRecipeIds?: string[]
   replacementCandidatesBySlot?: Partial<Record<MealSlot, RecipeCandidate[]>>
+  nutritionCatalog?: NutritionFood[]
 }): CalorieAdjustmentPlan {
   const saved = new Set(input.savedRecipeIds ?? [])
   const buckets: CandidateBucket[] = []
@@ -157,6 +158,7 @@ export function buildCalorieAdjustmentPlan(input: {
             savedRecipeIds: saved,
             dayIndex: day.dayIndex,
             replacementCandidates: input.replacementCandidatesBySlot?.[meal.slot],
+            nutritionCatalog: input.nutritionCatalog,
           })
 
       buckets.push({
@@ -271,6 +273,7 @@ function candidateOptions(input: {
   savedRecipeIds: Set<string>
   dayIndex: number
   replacementCandidates?: RecipeCandidate[]
+  nutritionCatalog?: NutritionFood[]
 }): Candidate[] {
   const candidates = [
     resizeCandidate(input),
@@ -384,10 +387,11 @@ function resizeCandidate(input: {
   targetCalories: number
   targetProtein: number
   savedRecipeIds: Set<string>
+  nutritionCatalog?: NutritionFood[]
 }): Candidate {
   const ratio = input.targetCalories / Math.max(input.meal.nutrition.calories, 1)
   const recipe = scaleRecipe(toRecipeCandidate(input.meal.recipe), clamp(ratio, 0.68, 1.28))
-  const nutrition = scoreRecipe(recipe, input.profile.bannedFoods).nutrition
+  const nutrition = scoreRecipe(recipe, input.profile.bannedFoods, input.nutritionCatalog).nutrition
   return scoredCandidate({
     kind: 'portion_resize',
     reason: 'Misma receta con porciones ajustadas de forma uniforme.',
@@ -407,6 +411,7 @@ function rebalanceCandidate(input: {
   targetCalories: number
   targetProtein: number
   savedRecipeIds: Set<string>
+  nutritionCatalog?: NutritionFood[]
 }): Candidate {
   const current = input.meal.nutrition.calories
   const ratio = input.targetCalories / Math.max(current, 1)
@@ -422,8 +427,8 @@ function rebalanceCandidate(input: {
       }
     }),
   }
-  const calibrated = calibrateFlexibleIngredients(recipe, input.targetCalories)
-  const nutrition = scoreRecipe(calibrated, input.profile.bannedFoods).nutrition
+  const calibrated = calibrateFlexibleIngredients(recipe, input.targetCalories, input.nutritionCatalog)
+  const nutrition = scoreRecipe(calibrated, input.profile.bannedFoods, input.nutritionCatalog).nutrition
   return scoredCandidate({
     kind: 'ingredient_rebalance',
     reason: direction === 'down'
@@ -447,13 +452,14 @@ function replacementCandidates(input: {
   savedRecipeIds: Set<string>
   dayIndex: number
   replacementCandidates?: RecipeCandidate[]
+  nutritionCatalog?: NutritionFood[]
 }): Candidate[] {
   return (input.replacementCandidates ?? templatesForSlot(input.meal.slot, [...input.profile.bannedFoods, ...input.profile.dislikes], input.profile.locale))
     .filter((recipe) => recipe.title !== input.meal.recipe.title)
     .slice(0, 5)
     .map((recipe, index) => {
-      const calibrated = calibrateFlexibleIngredients(scaleRecipe(recipe, clamp(input.targetCalories / Math.max(scoreRecipe(recipe).nutrition.calories, 1), 0.72, 1.32)), input.targetCalories)
-      const nutrition = scoreRecipe(calibrated, input.profile.bannedFoods).nutrition
+      const calibrated = calibrateFlexibleIngredients(scaleRecipe(recipe, clamp(input.targetCalories / Math.max(scoreRecipe(recipe, [], input.nutritionCatalog).nutrition.calories, 1), 0.72, 1.32)), input.targetCalories, input.nutritionCatalog)
+      const nutrition = scoreRecipe(calibrated, input.profile.bannedFoods, input.nutritionCatalog).nutrition
       return scoredCandidate({
         kind: 'recipe_replacement',
         reason: `Receta alternativa validada contra el objetivo del ${slotLabel(input.meal.slot, input.profile.locale)} y el menú semanal.`,
@@ -541,10 +547,10 @@ function culinaryIntegrityPenalty(recipe: RecipeCandidate, nutrition: NutritionT
   return penalty
 }
 
-function calibrateFlexibleIngredients(recipe: RecipeCandidate, targetCalories: number): RecipeCandidate {
+function calibrateFlexibleIngredients(recipe: RecipeCandidate, targetCalories: number, nutritionCatalog?: NutritionFood[]): RecipeCandidate {
   let calibrated = recipe
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const nutrition = scoreRecipe(calibrated).nutrition
+    const nutrition = scoreRecipe(calibrated, [], nutritionCatalog).nutrition
     const delta = targetCalories - nutrition.calories
     if (Math.abs(delta) < targetCalories * 0.06) return calibrated
     const direction = delta >= 0 ? 1 : -1

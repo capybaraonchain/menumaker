@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
     "migrate": "tsx src/migrate.ts",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "nutrition:import": "tsx src/nutritionSourceImport.ts"
   },
   "dependencies": {
     "@menumaker/ai": "0.1.0",

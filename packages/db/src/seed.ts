@@ -31,10 +31,14 @@ async function main(): Promise<void> {
     await sql`
       insert into nutrition_records (food_id, source_id, per_100g, confidence)
       values (${food.id}, ${`seed:${food.id}`}, ${sql.json(food.per100g as any)}, ${food.confidence})
+      on conflict (food_id, source_id) do update set
+        per_100g = excluded.per_100g,
+        confidence = excluded.confidence
     `
     await sql`
       insert into food_mappings (food_id, source_id, confidence)
       values (${food.id}, ${`seed:${food.id}`}, ${food.confidence})
+      on conflict (food_id, source_id) do update set confidence = excluded.confidence
     `
     for (const alias of food.aliases) {
       await sql`
