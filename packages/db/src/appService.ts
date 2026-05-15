@@ -198,6 +198,19 @@ export interface CancelGenerationJobResult {
   markdown: string
 }
 
+export interface GenerationWorkerResult {
+  processed: number
+  completed: number
+  failed: number
+  skipped: number
+  jobs: Array<{
+    jobId: string
+    kind: string
+    status: 'completed' | 'failed' | 'skipped'
+    message: string
+  }>
+}
+
 export interface RelaxProfilePreferencesResult {
   profileId: string
   removedDislikes: string[]
@@ -1268,15 +1281,20 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   const input = weeklyMenuJobInputFromResult(job.result)
   const profile = (await listProfiles()).find((item) => item.id === input.profileId)
   if (!profile) throw new Error('Perfil no encontrado para el trabajo de generación.')
-  await sql`
+  const [claimed] = await sql`
     update generation_jobs
     set status = 'running',
       logs = ${sql.json(['En cola', 'Construyendo semana'] as any)},
       error = null,
       failure_code = null,
       updated_at = now()
-    where id = ${jobId} and user_id = ${localUserId()}
+    where id = ${jobId} and user_id = ${localUserId()} and status in ('queued', 'failed')
+    returning id
   `
+  if (!claimed) {
+    const [current] = await sql`select status from generation_jobs where id = ${jobId} and user_id = ${localUserId()}`
+    throw new Error(`No se puede ejecutar un trabajo en estado ${current?.status ?? 'desconocido'}.`)
+  }
 
   let weekRecipes: Awaited<ReturnType<typeof buildRecipesForWeek>>
   try {
@@ -1449,15 +1467,20 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
   }
 
   const input = previewJobInputFromResult(job.result)
-  await sql`
+  const [claimed] = await sql`
     update generation_jobs
     set status = 'running',
       logs = ${sql.json(['En cola', 'Generando previsualización'] as any)},
       error = null,
       failure_code = null,
       updated_at = now()
-    where id = ${jobId} and user_id = ${localUserId()}
+    where id = ${jobId} and user_id = ${localUserId()} and status in ('queued', 'failed')
+    returning id
   `
+  if (!claimed) {
+    const [current] = await sql`select status from generation_jobs where id = ${jobId} and user_id = ${localUserId()}`
+    throw new Error(`No se puede ejecutar una previsualización en estado ${current?.status ?? 'desconocido'}.`)
+  }
 
   try {
     const plan = await previewPlanFromJobInput(input)
@@ -1491,6 +1514,57 @@ export async function runPreviewGenerationJob(jobId: string): Promise<PreviewGen
       returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
     `
     throw Object.assign(error instanceof Error ? error : new Error(String(error)), { job: generationJobFromRow(updated) })
+  }
+}
+
+export async function runQueuedGenerationJobs(limit = 1): Promise<GenerationWorkerResult> {
+  const sql = sqlClient()
+  const batchSize = Math.max(1, Math.min(10, Math.round(limit)))
+  const rows = await sql<Array<{ id: string; kind: string }>>`
+    select id, kind
+    from generation_jobs
+    where user_id = ${localUserId()} and status = 'queued'
+    order by created_at asc
+    limit ${batchSize}
+  `
+  const result: GenerationWorkerResult = { processed: 0, completed: 0, failed: 0, skipped: 0, jobs: [] }
+  for (const row of rows) {
+    result.processed += 1
+    try {
+      if (String(row.kind).startsWith('preview_')) {
+        await runPreviewGenerationJob(row.id)
+      } else {
+        await runGenerationJob(row.id)
+      }
+      result.completed += 1
+      result.jobs.push({ jobId: row.id, kind: row.kind, status: 'completed', message: 'Trabajo completado por worker local.' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message.includes('estado running') || message.includes('estado completed') || message.includes('cancelado')) {
+        result.skipped += 1
+        result.jobs.push({ jobId: row.id, kind: row.kind, status: 'skipped', message })
+      } else {
+        result.failed += 1
+        result.jobs.push({ jobId: row.id, kind: row.kind, status: 'failed', message })
+      }
+    }
+  }
+  return result
+}
+
+export async function runGenerationWorker(options: { limit?: number; pollIntervalMs?: number; once?: boolean } = {}): Promise<GenerationWorkerResult> {
+  const limit = options.limit ?? 1
+  if (options.once ?? true) return runQueuedGenerationJobs(limit)
+  const aggregate: GenerationWorkerResult = { processed: 0, completed: 0, failed: 0, skipped: 0, jobs: [] }
+  const pollIntervalMs = Math.max(500, options.pollIntervalMs ?? 5000)
+  for (;;) {
+    const next = await runQueuedGenerationJobs(limit)
+    aggregate.processed += next.processed
+    aggregate.completed += next.completed
+    aggregate.failed += next.failed
+    aggregate.skipped += next.skipped
+    aggregate.jobs.push(...next.jobs)
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
   }
 }
 

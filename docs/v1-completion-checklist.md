@@ -210,12 +210,13 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation still executes inside requests by default, but weekly generation and long preview flows are now job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves the job to running and completed/failed/cancelled. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full background worker queues and streaming progress remain deferred.
+Local v1 generation can still execute inside requests for direct “run now” actions, but weekly generation and long preview flows are job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves it to running and completed/failed/cancelled. A local worker command can process queued weekly or preview jobs outside the web request. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full hosted worker queues and streaming progress remain deferred.
 
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
 - [x] Weekly generation can be enqueued without immediate execution.
 - [x] Weekly generation has a reusable runner that executes a queued job.
+- [x] Local worker command can process queued weekly generation and preview jobs outside the web request.
 - [x] MCP exposes enqueue and run tools for weekly generation jobs.
 - [x] Regeneration and calorie preview plans can be queued and executed through shared app actions.
 - [x] MCP exposes enqueue and run tools for preview generation jobs.

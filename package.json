@@ -18,6 +18,7 @@
     "db:ensure": "createdb menumaker 2>/dev/null || true",
     "db:migrate": "npm --workspace @menumaker/db run migrate",
     "db:seed": "npm --workspace @menumaker/db run seed",
+    "worker:generation": "npm --workspace @menumaker/db run worker:generation",
     "setup:local": "npm run db:ensure && npm run db:migrate && npm run db:seed"
   },
   "devDependencies": {

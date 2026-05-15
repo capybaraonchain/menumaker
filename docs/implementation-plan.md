@@ -258,6 +258,7 @@ Acceptance:
 - Ingredient remediation can search the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
 - Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
+- `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 
