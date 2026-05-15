@@ -338,7 +338,7 @@ server.registerTool(
 server.registerTool(
   'suggest_meal_replacements',
   {
-    description: 'Proposal: suggest three replacement meals. Does not mutate state.',
+    description: 'Proposal: suggest three replacement meals using LLM-generated candidates validated by deterministic nutrition and menu scoring. Does not mutate state.',
     inputSchema: { menuMealId: z.string().uuid(), request: z.string() },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -606,6 +606,24 @@ server.registerTool(
       profilePreferenceSaved: Boolean(profileId && preferenceValue && preferenceKind),
       latestMenu: latest,
     })
+  },
+)
+
+server.registerTool(
+  'apply_similar_replacements',
+  {
+    description: 'Mutation: replace related meals that contain an avoided ingredient using the shared suggestion pipeline, and save the preference. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      menuMealIds: z.array(z.string().uuid()).default([]),
+      ingredient: z.string().min(1),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, menuMealIds, ingredient, confirmed }) => {
+    requireConfirmation(confirmed, 'similar replacements')
+    return json(await executeAppAction('applySimilarReplacements', { profileId, menuMealIds, ingredient }))
   },
 )
 

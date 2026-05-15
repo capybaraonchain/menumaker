@@ -1,4 +1,8 @@
 import {
+  generateRecipeCandidates,
+  type RecipeGenerationResult,
+} from '@menumaker/ai'
+import {
   calculateMacroTargets,
   impossibleTargetConflict,
   mealSlots,
@@ -14,7 +18,7 @@ import {
   type RecipeCandidate,
   type Sex,
 } from '@menumaker/core'
-import { normalizeIngredientName, scoreRecipe, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
+import { normalizeIngredientName, scoreRecipe, seedFoods, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
 import {
   buildCalorieAdjustmentPlan,
   currentMenuHash,
@@ -166,6 +170,17 @@ interface ReplacementRankedCandidate {
   creativeScore: number
   macroScore: number
   overallScore: number
+}
+
+interface GeneratedScoredRecipe {
+  recipe: ReturnType<typeof scoreRecipe>
+  source: 'llm' | 'template'
+}
+
+interface RecipePoolResult {
+  recipes: GeneratedScoredRecipe[]
+  source: 'llm' | 'template' | 'mixed'
+  llmResult: RecipeGenerationResult
 }
 
 const replacementSlotShares: Record<MealSlot, number> = {
@@ -347,6 +362,7 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
   `
   if (!menu) throw new Error('No se pudo crear el menú.')
 
+  const weekRecipes = await buildRecipesForWeek(profile, target)
   const dayNutrition: NutritionTotals[] = []
   for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
     const [day] = await sql<[{ id: string }]>`
@@ -355,9 +371,9 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
       returning id
     `
     if (!day) throw new Error('No se pudo crear el día.')
-    const dayRecipes = buildRecipesForDay(profile, dayIndex, target)
+    const dayRecipes = weekRecipes.days[dayIndex] ?? []
     for (const item of dayRecipes) {
-      const recipeId = await persistRecipe(item.recipe, 'generated')
+      const recipeId = await persistRecipe(item.recipe, weekRecipes.source === 'template' ? 'template_generated' : 'llm_generated')
       await sql`
         insert into menu_meals (user_id, day_plan_id, recipe_id, slot, locked, nutrition_snapshot)
         values (${localUserId()}, ${day.id}, ${recipeId}, ${item.slot}, false, ${sql.json(item.recipe.nutrition as any)})
@@ -368,10 +384,23 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
 
   const weeklyNutrition = sumNutrition(dayNutrition)
   await sql`update weekly_menus set nutrition_snapshot = ${sql.json(weeklyNutrition as any)} where id = ${menu.id}`
+  await sql`
+    update weekly_menus set generation_settings = ${sql.json({
+      kind,
+      recipeSource: weekRecipes.source,
+      fallbackSlots: weekRecipes.fallbackSlots,
+    } as any)}
+    where id = ${menu.id}
+  `
   if (job) {
     await sql`
       update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
-        logs = ${sql.json(['Construyendo semana', 'Generando recetas', 'Calculando nutrición', 'Finalizando'] as any)},
+        logs = ${sql.json([
+          'Construyendo semana',
+          weekRecipes.source === 'template' ? 'Usando fallback determinístico de recetas' : 'Generando candidatos con LLM',
+          'Calculando nutrición',
+          'Finalizando',
+        ] as any)},
         result = ${sql.json({ menuId: menu.id } as any)}, updated_at = now()
       where id = ${job.id}
     `
@@ -505,6 +534,20 @@ export async function previewCalorieAdjustmentPlan(profileId: string, calories: 
   const profile = (await listProfiles()).find((item) => item.id === profileId)
   if (!profile) throw new Error('Perfil no encontrado.')
   const savedRecipeIds = (await getSavedRecipes(profileId)).map((item) => item.recipe.id)
+  const replacementCandidatesBySlot: Partial<Record<MealSlot, RecipeCandidate[]>> = {}
+  for (const slot of mealSlots) {
+    const pool = await recipePoolForSlot({
+      profile,
+      slot,
+      count: 8,
+      avoidFoods: profileAvoidedFoods(profile),
+      avoidTitles: current.days.flatMap((day) => day.meals.filter((meal) => meal.slot === slot).map((meal) => meal.recipe.title)),
+      targetNutrition: targetNutritionForSlot(target, slot),
+      userRequest: `Genera candidatos alternativos para reajustar calorías en ${slotLabel(slot)} sin romper variedad semanal.`,
+      menuContext: compactMenuForGeneration(current),
+    })
+    replacementCandidatesBySlot[slot] = pool.recipes.map((item) => item.recipe)
+  }
   return buildCalorieAdjustmentPlan({
     profile: {
       id: profile.id,
@@ -516,6 +559,7 @@ export async function previewCalorieAdjustmentPlan(profileId: string, calories: 
     currentMenu: toPlannerMenu(current),
     target,
     savedRecipeIds,
+    replacementCandidatesBySlot,
   })
 }
 
@@ -596,7 +640,7 @@ export async function suggestMealReplacements(menuMealId: string, request: strin
 
   const requestFeatures = parseReplacementRequest(request, menu, meal)
   const avoidedFoods = unique([...profileAvoidedFoods(profile), ...requestFeatures.avoidedFoods])
-  const ranked = rankReplacementCandidates({
+  const ranked = await rankReplacementCandidates({
     menu,
     day,
     meal,
@@ -782,17 +826,241 @@ async function createWeeklyMenuFromCalorieAdjustmentPlan(
   return getWeeklyMenu(menu.id)
 }
 
-function buildRecipesForDay(profile: ProfileRow, dayIndex: number, targets: MacroTargets): Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }> {
-  const avoidedFoods = profileAvoidedFoods(profile)
-  const base = mealSlots.map((slot, slotIndex) => {
-    const options = templatesForSlot(slot, avoidedFoods, profile.locale)
-    const selected = options[(dayIndex + slotIndex) % options.length] ?? options[0]
-    if (!selected) throw new Error(`No hay receta disponible para ${slot}.`)
-    return { slot, recipe: scoreRecipe(selected, avoidedFoods) }
+async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): Promise<{
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>
+  source: 'llm' | 'template' | 'mixed'
+  fallbackSlots: MealSlot[]
+}> {
+  const pools = new Map<MealSlot, RecipePoolResult>()
+  for (const slot of mealSlots) {
+    pools.set(slot, await recipePoolForSlot({
+      profile,
+      slot,
+      count: 12,
+      avoidFoods: profileAvoidedFoods(profile),
+      avoidTitles: [],
+      targetNutrition: targetNutritionForSlot(targets, slot),
+      userRequest: `Genera opciones variadas para ${slotLabel(slot)} de una semana completa.`,
+      menuContext: {
+        target: targets,
+        existingTitles: [],
+      },
+    }))
+  }
+
+  const titleCounts = new Map<string, number>()
+  const days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>> = []
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayItems: Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }> = []
+    for (const slot of mealSlots) {
+      const pool = pools.get(slot)
+      if (!pool || pool.recipes.length === 0) throw new Error(`No hay receta disponible para ${slot}.`)
+      const recipe = chooseWeekRecipe(pool.recipes, {
+        slot,
+        target: targetNutritionForSlot(targets, slot),
+        dayItems,
+        titleCounts,
+        dayIndex,
+      })
+      dayItems.push({ slot, recipe })
+      const title = normalizeIngredientName(recipe.title)
+      titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1)
+    }
+    days.push(dayItems)
+  }
+
+  const fallbackSlots = mealSlots.filter((slot) => pools.get(slot)?.source !== 'llm')
+  return {
+    days,
+    source: fallbackSlots.length === 0 ? 'llm' : fallbackSlots.length === mealSlots.length ? 'template' : 'mixed',
+    fallbackSlots,
+  }
+}
+
+async function recipePoolForSlot(input: {
+  profile: ProfileRow
+  slot: MealSlot
+  count: number
+  avoidFoods: string[]
+  avoidTitles: string[]
+  targetNutrition: NutritionTotals
+  userRequest?: string
+  menuContext?: unknown
+}): Promise<RecipePoolResult> {
+  const avoidFoods = unique([...input.profile.bannedFoods, ...input.profile.dislikes, ...input.avoidFoods])
+  const llmResult = await generateRecipeCandidates({
+    locale: input.profile.locale,
+    slot: input.slot,
+    count: input.count,
+    profileName: input.profile.name,
+    likes: input.profile.likes,
+    dislikes: input.profile.dislikes,
+    bannedFoods: input.profile.bannedFoods,
+    avoidFoods,
+    avoidTitles: input.avoidTitles,
+    userRequest: input.userRequest,
+    targetNutrition: input.targetNutrition,
+    menuContext: input.menuContext,
+    allowedIngredients: seedFoods.flatMap((food) => food.aliases.slice(0, 2)),
   })
-  const total = sumNutrition(base.map((item) => item.recipe.nutrition))
-  const factor = Math.max(0.75, Math.min(1.35, targets.calories / Math.max(total.calories, 1)))
-  return base.map((item) => ({ ...item, recipe: scoreRecipe(scaleRecipe(item.recipe, factor), profile.bannedFoods) }))
+  const llmRecipes = scoreGeneratedCandidates({
+    candidates: llmResult.recipes,
+    avoidedFoods: avoidFoods,
+    avoidTitles: input.avoidTitles,
+    targetNutrition: input.targetNutrition,
+    source: 'llm',
+    limit: input.count,
+  })
+  if (llmRecipes.length >= Math.min(input.count, 3)) {
+    return { recipes: llmRecipes, source: 'llm', llmResult }
+  }
+
+  const templateRecipes = scoreGeneratedCandidates({
+    candidates: templatesForSlot(input.slot, avoidFoods, input.profile.locale),
+    avoidedFoods: avoidFoods,
+    avoidTitles: input.avoidTitles,
+    targetNutrition: input.targetNutrition,
+    source: 'template',
+    limit: input.count,
+  })
+  const seen = new Set(llmRecipes.map((item) => normalizeIngredientName(item.recipe.title)))
+  const merged = [
+    ...llmRecipes,
+    ...templateRecipes.filter((item) => !seen.has(normalizeIngredientName(item.recipe.title))),
+  ].slice(0, input.count)
+  return {
+    recipes: merged,
+    source: llmRecipes.length > 0 ? 'mixed' : 'template',
+    llmResult,
+  }
+}
+
+function scoreGeneratedCandidates(input: {
+  candidates: RecipeCandidate[]
+  avoidedFoods: string[]
+  avoidTitles: string[]
+  targetNutrition: NutritionTotals
+  source: 'llm' | 'template'
+  limit: number
+}): GeneratedScoredRecipe[] {
+  const avoidedTitles = new Set(input.avoidTitles.map(normalizeIngredientName))
+  const seen = new Set<string>()
+  const scored: Array<GeneratedScoredRecipe & { fitScore: number }> = []
+  for (const candidate of input.candidates) {
+    const title = normalizeIngredientName(candidate.title)
+    if (!title || seen.has(title) || avoidedTitles.has(title)) continue
+    seen.add(title)
+    if (candidate.prepTimeMinutes > 120) continue
+    if (recipeIncludesAny(candidate, input.avoidedFoods)) continue
+
+    const raw = scoreRecipe(candidate, input.avoidedFoods)
+    if (hasUnknownIngredients(raw)) continue
+    const factor = clamp(input.targetNutrition.calories / Math.max(raw.nutrition.calories, 1), 0.72, 1.28)
+    const scaled = scoreRecipe(scaleRecipe(candidate, factor), input.avoidedFoods)
+    if (hasUnknownIngredients(scaled)) continue
+    scored.push({
+      recipe: scaled,
+      source: input.source,
+      fitScore: recipeFitScore(scaled.nutrition, input.targetNutrition),
+    })
+  }
+  return scored.sort((left, right) => right.fitScore - left.fitScore).slice(0, input.limit)
+}
+
+function chooseWeekRecipe(input: GeneratedScoredRecipe[], context: {
+  slot: MealSlot
+  target: NutritionTotals
+  dayItems: Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>
+  titleCounts: Map<string, number>
+  dayIndex: number
+}): ReturnType<typeof scoreRecipe> {
+  const scored = input.map((item) => {
+    const title = normalizeIngredientName(item.recipe.title)
+    const repeatCount = context.titleCounts.get(title) ?? 0
+    const sameDay = context.dayItems.some((existing) => normalizeIngredientName(existing.recipe.title) === title)
+    const score = recipeFitScore(item.recipe.nutrition, context.target) -
+      repeatCount * 45 -
+      (sameDay ? 120 : 0) +
+      (item.source === 'llm' ? 8 : 0) -
+      Math.abs((context.dayIndex % 3) - (title.length % 3)) * 0.5
+    return { item, score }
+  })
+  return scored.sort((left, right) => right.score - left.score)[0]?.item.recipe ?? input[0]!.recipe
+}
+
+function chooseReplacementCandidate(
+  input: GeneratedScoredRecipe[],
+  menu: WeeklyMenuView,
+  day: DayPlanView,
+  meal: MenuMealView,
+  target: MacroTargets,
+): GeneratedScoredRecipe | null {
+  const existingTitles = new Map<string, number>()
+  for (const currentDay of menu.days) {
+    for (const currentMeal of currentDay.meals) {
+      if (currentMeal.id === meal.id) continue
+      const title = normalizeIngredientName(currentMeal.recipe.title)
+      existingTitles.set(title, (existingTitles.get(title) ?? 0) + 1)
+    }
+  }
+  return input.map((item) => {
+    const title = normalizeIngredientName(item.recipe.title)
+    const sameDay = day.meals.some((currentMeal) => currentMeal.id !== meal.id && normalizeIngredientName(currentMeal.recipe.title) === title)
+    const weeklyAfter = diffNutrition(sumNutrition([menu.nutrition, item.recipe.nutrition, negateNutrition(meal.nutrition)]), weeklyTarget(target))
+    const score = recipeFitScore(item.recipe.nutrition, targetNutritionForSlot(target, meal.slot)) -
+      (existingTitles.get(title) ?? 0) * 25 -
+      (sameDay ? 120 : 0) -
+      Math.abs(weeklyAfter.calories) / Math.max(target.calories * 7, 1) * 60 +
+      (item.source === 'llm' ? 10 : 0)
+    return { item, score }
+  }).sort((left, right) => right.score - left.score)[0]?.item ?? null
+}
+
+function targetNutritionForSlot(target: MacroTargets, slot: MealSlot): NutritionTotals {
+  const share = replacementSlotShares[slot]
+  return {
+    calories: round(target.calories * share),
+    proteinG: round(target.proteinG * share),
+    carbsG: round(target.carbsG * share),
+    fatG: round(target.fatG * share),
+    confidence: target.confidence,
+  }
+}
+
+function recipeFitScore(nutrition: NutritionTotals, target: NutritionTotals): number {
+  return 120 -
+    Math.abs(nutrition.calories - target.calories) / Math.max(target.calories, 1) * 80 -
+    Math.max(0, target.proteinG - nutrition.proteinG) / Math.max(target.proteinG, 1) * 70 -
+    Math.abs(nutrition.fatG - target.fatG) / Math.max(target.fatG, 1) * 20 -
+    Math.abs(nutrition.carbsG - target.carbsG) / Math.max(target.carbsG, 1) * 18
+}
+
+function hasUnknownIngredients(recipe: ReturnType<typeof scoreRecipe>): boolean {
+  return recipe.matchedIngredients.some((ingredient) => ingredient.confidence === 'unknown')
+}
+
+function compactMenuForGeneration(menu: WeeklyMenuView): unknown {
+  return {
+    target: menu.target,
+    days: menu.days.map((day) => ({
+      dayIndex: day.dayIndex,
+      locked: day.locked,
+      meals: day.meals.map((meal) => ({
+        slot: meal.slot,
+        locked: meal.locked,
+        title: meal.recipe.title,
+        ingredients: meal.recipe.ingredients.map((ingredient) => ingredient.name),
+        nutrition: meal.nutrition,
+      })),
+    })),
+  }
+}
+
+function slotLabel(slot: MealSlot): string {
+  if (slot === 'breakfast') return 'desayuno'
+  if (slot === 'lunch') return 'comida'
+  if (slot === 'dinner') return 'cena'
+  return 'snack'
 }
 
 function scaleRecipe(recipe: RecipeCandidate, factor: number): RecipeCandidate {
@@ -984,12 +1252,28 @@ function retargetCalories(target: MacroTargets, calories: number): MacroTargets 
 }
 
 async function replaceMealWithGenerated(menuMealId: string, profile: ProfileRow, target: MacroTargets, dayIndex: number): Promise<void> {
-  const sql = sqlClient()
-  const [meal] = await sql`select slot from menu_meals where id = ${menuMealId} and user_id = ${localUserId()}`
-  if (!meal) return
-  const candidate = buildRecipesForDay(profile, dayIndex + 1, target).find((item) => item.slot === meal.slot)
+  const menu = await menuForMeal(menuMealId)
+  const day = menu.days.find((item) => item.meals.some((meal) => meal.id === menuMealId))
+  const meal = day?.meals.find((item) => item.id === menuMealId)
+  if (!day || !meal) return
+  const avoidTitles = [
+    meal.recipe.title,
+    ...day.meals.filter((item) => item.id !== meal.id).map((item) => item.recipe.title),
+  ]
+  const pool = await recipePoolForSlot({
+    profile,
+    slot: meal.slot,
+    count: 8,
+    avoidFoods: profileAvoidedFoods(profile),
+    avoidTitles,
+    targetNutrition: targetNutritionForSlot(target, meal.slot),
+    userRequest: `Regenera ${slotLabel(meal.slot)} con una receta nueva, rica y coherente con el menú semanal.`,
+    menuContext: compactMenuForGeneration(menu),
+  })
+  const candidate = chooseReplacementCandidate(pool.recipes, menu, day, meal, target)
   if (!candidate) return
-  const recipeId = await persistRecipe(candidate.recipe, 'regenerated')
+  const recipeId = await persistRecipe(candidate.recipe, candidate.source === 'llm' ? 'llm_regenerated' : 'template_regenerated')
+  const sql = sqlClient()
   await sql`
     update menu_meals set recipe_id = ${recipeId}, nutrition_snapshot = ${sql.json(candidate.recipe.nutrition as any)}
     where id = ${menuMealId} and user_id = ${localUserId()}
@@ -1047,14 +1331,14 @@ function inferAvoidedFoods(request: string, menu: WeeklyMenuView, meal: MenuMeal
   return value ? [value] : []
 }
 
-function rankReplacementCandidates(input: {
+async function rankReplacementCandidates(input: {
   menu: WeeklyMenuView
   day: DayPlanView
   meal: MenuMealView
   profile: ProfileRow
   avoidedFoods: string[]
   requestFeatures: ReplacementRequestFeatures
-}): ReplacementRankedCandidate[] {
+}): Promise<ReplacementRankedCandidate[]> {
   const titleCounts = new Map<string, number>()
   for (const day of input.menu.days) {
     for (const meal of day.meals) {
@@ -1067,7 +1351,19 @@ function rankReplacementCandidates(input: {
     .filter((meal) => meal.id !== input.meal.id)
     .map((meal) => normalizeIngredientName(meal.recipe.title)))
   const selected = new Map<string, ReplacementRankedCandidate>()
-  const rawCandidates = templatesForSlot(input.meal.slot, input.avoidedFoods, input.profile.locale)
+  const pool = await recipePoolForSlot({
+    profile: input.profile,
+    slot: input.meal.slot,
+    count: 10,
+    avoidFoods: input.avoidedFoods,
+    avoidTitles: [input.meal.recipe.title],
+    targetNutrition: targetNutritionForSlot(input.menu.target, input.meal.slot),
+    userRequest: input.requestFeatures.avoidedFoods.length > 0
+      ? `El usuario pidió cambiar este plato evitando: ${input.requestFeatures.avoidedFoods.join(', ')}. Genera recetas nuevas, no variantes con esos ingredientes.`
+      : 'Genera reemplazos nuevos y variados para este plato.',
+    menuContext: compactMenuForGeneration(input.menu),
+  })
+  const rawCandidates = pool.recipes.map((item) => item.recipe)
 
   for (const candidate of rawCandidates) {
     const title = normalizeIngredientName(candidate.title)

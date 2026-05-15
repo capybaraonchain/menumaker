@@ -137,6 +137,7 @@ export function buildCalorieAdjustmentPlan(input: {
   currentMenu: CaloriePlannerMenu
   target: MacroTargets
   savedRecipeIds?: string[]
+  replacementCandidatesBySlot?: Partial<Record<MealSlot, RecipeCandidate[]>>
 }): CalorieAdjustmentPlan {
   const saved = new Set(input.savedRecipeIds ?? [])
   const buckets: CandidateBucket[] = []
@@ -155,6 +156,7 @@ export function buildCalorieAdjustmentPlan(input: {
             targetProtein,
             savedRecipeIds: saved,
             dayIndex: day.dayIndex,
+            replacementCandidates: input.replacementCandidatesBySlot?.[meal.slot],
           })
 
       buckets.push({
@@ -268,6 +270,7 @@ function candidateOptions(input: {
   targetProtein: number
   savedRecipeIds: Set<string>
   dayIndex: number
+  replacementCandidates?: RecipeCandidate[]
 }): Candidate[] {
   const candidates = [
     resizeCandidate(input),
@@ -443,8 +446,9 @@ function replacementCandidates(input: {
   targetProtein: number
   savedRecipeIds: Set<string>
   dayIndex: number
+  replacementCandidates?: RecipeCandidate[]
 }): Candidate[] {
-  return templatesForSlot(input.meal.slot, [...input.profile.bannedFoods, ...input.profile.dislikes], input.profile.locale)
+  return (input.replacementCandidates ?? templatesForSlot(input.meal.slot, [...input.profile.bannedFoods, ...input.profile.dislikes], input.profile.locale))
     .filter((recipe) => recipe.title !== input.meal.recipe.title)
     .slice(0, 5)
     .map((recipe, index) => {

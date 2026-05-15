@@ -73,6 +73,7 @@ Mutation tools:
 - `start_weekly_menu_generation`
 - `replace_meal`
 - `apply_confirmed_replacements`
+- `apply_similar_replacements`
 - `lock_meal`
 - `lock_day`
 - `star_recipe`
@@ -96,7 +97,7 @@ Broad or persistent changes should use a two-step flow:
 Examples:
 
 - Replacing one meal after the user selects a replacement can proceed through `replace_meal`.
-- Applying similar broccoli replacements across the whole week requires explicit confirmation.
+- Applying similar broccoli replacements across the whole week requires explicit confirmation and should use the same LLM-candidate plus deterministic-scoring replacement pipeline as the web UI.
 - Saving "broccoli" as a profile dislike or ban requires explicit confirmation.
 - Regenerating the whole week requires confirmation and must preserve locked days and meals.
 - Changing calorie targets requires a calorie adjustment preview when possible. The confirmed mutation should apply the previewed plan and reject it if the menu changed after preview.
@@ -175,6 +176,7 @@ The companion skill should instruct agents to:
 - Preview calorie target changes with `preview_calorie_adjustment_plan` before mutation.
 - Explain whether a calorie adjustment changed portions, rebalanced ingredients, or replaced recipes.
 - Validate replacement recipes against the day and week, not only the single meal.
+- Treat recipe generation and replacement tools as LLM-first proposal tools with deterministic validation. Deterministic templates are fallback only and should not be presented as the ideal recipe source.
 - Keep responses focused on weekly diet planning, not pantry, shopping, or medical nutrition.
 
 The skill should discourage agents from:

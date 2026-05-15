@@ -87,7 +87,12 @@ type ReplacementProposal = {
   inferredIngredient: string | null
   options: Array<{ kind: string; recipe: any; nutrition: Nutrition; macroImpact: Nutrition }>
 }
-type SimilarPrompt = { ingredient: string; mealIds: string[] }
+type PendingReplacement = {
+  option: ReplacementProposal['options'][number]
+  proposal: ReplacementProposal
+  ingredient: string
+  relatedMealIds: string[]
+}
 type ChatAction = {
   id: string
   type: string
@@ -114,7 +119,7 @@ export default function App() {
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null)
   const [editMeal, setEditMeal] = useState<Meal | null>(null)
   const [proposal, setProposal] = useState<ReplacementProposal | null>(null)
-  const [similarPrompt, setSimilarPrompt] = useState<SimilarPrompt | null>(null)
+  const [pendingReplacement, setPendingReplacement] = useState<PendingReplacement | null>(null)
   const [creatingProfile, setCreatingProfile] = useState(false)
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
@@ -244,6 +249,7 @@ export default function App() {
         <Modal title="Editar plato" onClose={() => {
           setEditMeal(null)
           setProposal(null)
+          setPendingReplacement(null)
         }}>
           <div className="edit-flow">
             <p className="muted">Pide un cambio concreto. Primero verás opciones; los cambios de toda la semana requieren confirmación.</p>
@@ -261,11 +267,12 @@ export default function App() {
                 </div>
                 {proposal.options.map((option) => (
                   <button key={option.kind} className="proposal-row" onClick={async () => {
-                    await postAction({ action: 'replaceMeal', menuMealId: editMeal.id, recipe: option.recipe, profileId: activeProfileId })
                     const relatedMealIds = proposal.affectedMeals.filter((mealId) => mealId !== editMeal.id)
                     if (proposal.inferredIngredient && relatedMealIds.length > 0) {
-                      setSimilarPrompt({ ingredient: proposal.inferredIngredient, mealIds: relatedMealIds })
+                      setPendingReplacement({ option, proposal, ingredient: proposal.inferredIngredient, relatedMealIds })
+                      return
                     }
+                    await postAction({ action: 'replaceMeal', menuMealId: editMeal.id, recipe: option.recipe, profileId: activeProfileId })
                     setEditMeal(null)
                     setProposal(null)
                   }}>
@@ -289,25 +296,33 @@ export default function App() {
         </Modal>
       )}
 
-      {similarPrompt && (
-        <Modal title="Aplicar cambios similares" onClose={() => setSimilarPrompt(null)}>
+      {pendingReplacement && editMeal && (
+        <Modal title="Alcance del cambio" onClose={() => setPendingReplacement(null)}>
           <div className="confirm-flow">
             <p>
-              Hay {similarPrompt.mealIds.length} plato(s) más con {similarPrompt.ingredient}. ¿Quieres reemplazarlos también y guardar
-              esta preferencia para futuras semanas?
+              La opción seleccionada reemplaza este plato. También hay {pendingReplacement.relatedMealIds.length} plato(s) más con{' '}
+              {pendingReplacement.ingredient}. ¿Quieres quitarlo solo aquí o recalcular también los demás platos afectados y guardarlo como preferencia?
             </p>
             <button className="primary" onClick={async () => {
+              await postAction({ action: 'replaceMeal', menuMealId: editMeal.id, recipe: pendingReplacement.option.recipe, profileId: activeProfileId })
               await postAction({
                 action: 'applySimilarReplacements',
                 profileId: activeProfileId,
-                ingredient: similarPrompt.ingredient,
-                menuMealIds: similarPrompt.mealIds,
+                ingredient: pendingReplacement.ingredient,
+                menuMealIds: pendingReplacement.relatedMealIds,
               })
-              setSimilarPrompt(null)
+              setPendingReplacement(null)
+              setEditMeal(null)
+              setProposal(null)
             }}>
-              <Check size={18} /> Aplicar similares
+              <Check size={18} /> Recalcular todos
             </button>
-            <button className="secondary" onClick={() => setSimilarPrompt(null)}>Solo este plato</button>
+            <button className="secondary" onClick={async () => {
+              await postAction({ action: 'replaceMeal', menuMealId: editMeal.id, recipe: pendingReplacement.option.recipe, profileId: activeProfileId })
+              setPendingReplacement(null)
+              setEditMeal(null)
+              setProposal(null)
+            }}>Solo este plato</button>
           </div>
         </Modal>
       )}

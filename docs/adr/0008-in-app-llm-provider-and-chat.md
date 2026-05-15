@@ -52,6 +52,8 @@ Application code should call task-shaped functions such as:
 
 Application code should not call provider-specific HTTP endpoints directly outside the provider adapter.
 
+Recipe creation, weekly generation, regeneration, meal editing, and calorie-adjustment replacement candidates should prefer these provider-backed task functions. A deterministic template set may exist for local fallback, but it must be explicit, validated by the same deterministic pipeline, and not become the normal product path.
+
 ## Token Handling
 
 Tokens must stay server-side.

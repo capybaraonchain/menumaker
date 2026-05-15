@@ -97,6 +97,20 @@ Recipe generation must respect:
 - One serving per meal slot.
 - Spanish generation for Spanish profiles.
 
+## Recipe Source Policy
+
+The primary recipe source is the LLM recipe-candidate generator. Deterministic recipe templates are allowed only as an explicit local fallback when the provider is unavailable, the provider call fails, or too few generated candidates pass validation.
+
+This applies to:
+
+- First weekly menu generation.
+- Week, day, and meal regeneration.
+- Meal-edit replacement suggestions.
+- Similar ingredient replacements across the week.
+- Calorie-adjustment recipe replacements from ADR 0009.
+
+Fallback templates must still pass the same deterministic checks as generated recipes: banned or avoided ingredients, preparation time, ingredient matching, nutrition confidence, day/week macro impact, and repetition scoring. The app should record whether a menu or recipe came from LLM generation, fallback templates, or a mixed pool.
+
 ## Ingredient Normalization And Nutrition
 
 Every recipe candidate must pass through the nutrition matching pipeline from ADR 0004.
@@ -195,13 +209,15 @@ For a natural-language edit such as:
 The app should:
 
 1. Parse the edit intent.
-2. Generate three replacement options.
-3. Calculate deterministic nutrition for each replacement.
-4. Show macro and calorie impact.
-5. Let the user select a replacement.
-6. Detect related meals in the current week.
-7. Ask whether to apply similar replacements elsewhere.
-8. Ask whether to save the preference to the profile.
+2. Generate a larger LLM candidate pool for the same meal slot.
+3. Filter and score candidates deterministically.
+4. Show the best three replacement options.
+5. Calculate deterministic nutrition for each replacement.
+6. Show macro and calorie impact.
+7. Let the user select a replacement.
+8. Detect related meals in the current week.
+9. Ask whether the change applies only to this meal or also to related meals.
+10. Ask or state clearly before saving the inferred preference to the profile.
 
 Replacement options should default to:
 

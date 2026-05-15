@@ -120,6 +120,8 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Generation jobs have persisted status and logs. Rich async progress UI is deferred in Section 12.
 - [x] Week skeleton generation or assembly exists.
 - [x] Recipe candidate generation exists.
+- [x] Recipe candidate generation is LLM-first when the local Codex provider is configured.
+- [x] Deterministic recipe templates are explicit fallback only and still pass validation/scoring.
 - [x] Ingredient matching runs before finalization.
 - [x] Deterministic menu scoring exists.
 - [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
@@ -153,13 +155,14 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Meal detail can star recipe.
 - [x] Meal detail can lock meal.
 - [x] Meal edit accepts natural-language request.
-- [x] Meal edit shows three replacement options.
+- [x] Meal edit uses the natural-language request to generate, filter, and score replacement candidates.
+- [x] Meal edit shows three distinct replacement options when enough valid candidates exist.
 - [x] Replacement options include closest nutrition, creative/delicious, and macro-optimized.
 - [x] Replacement options show macro/calorie impact.
 - [x] Selecting a replacement updates the meal.
 - [x] Related replacement opportunities are detected.
-- [x] Week-wide propagation requires confirmation.
-- [x] Saving as profile preference requires confirmation.
+- [x] User chooses whether the edit applies only to this meal or also to related meals.
+- [x] Week-wide propagation and profile preference save require explicit confirmation.
 
 ## 11. Locks, Stars, And History
 
@@ -214,6 +217,7 @@ Local v1 generation is synchronous enough that a full async progress surface wou
 - [x] `get_weekly_menu` works.
 - [x] `analyze_recipe_nutrition` works.
 - [x] `suggest_meal_replacements` works.
+- [x] `apply_similar_replacements` works through the shared app action registry.
 - [x] `preview_calorie_adjustment_plan` works.
 - [x] Mutation tools preserve locks and product rules.
 - [x] Broad/persistent MCP changes require confirmation.

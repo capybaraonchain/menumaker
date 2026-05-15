@@ -12,7 +12,7 @@ Accepted
 
 Changing a profile's calorie target should not blindly scale every ingredient. Proportional scaling is sometimes correct, but it can make small meals unsatisfying, reduce protein too much, or preserve recipes that no longer fit the daily and weekly macro plan.
 
-The app needs a deterministic policy that can explain what will change before applying it, while still allowing AI-generated recipe candidates in later versions. Nutrition and acceptance decisions remain deterministic.
+The app needs a deterministic policy that can explain what will change before applying it, while using AI-generated recipe candidates when a replacement is better than shrinking or stretching the current recipe. Nutrition and acceptance decisions remain deterministic.
 
 ## Decision
 
@@ -35,6 +35,8 @@ Per-meal decisions are:
 - `preserve_locked`: locked day or meal is copied exactly.
 
 The app applies the exact server-owned plan after confirmation. If the current menu hash differs from the previewed menu hash, the mutation is rejected and the user must generate a fresh preview.
+
+Recipe-replacement candidates in the plan should come from the same LLM-first recipe pipeline used by weekly generation and meal editing. Deterministic templates are fallback only when the provider is unavailable, fails, or cannot produce enough valid candidates.
 
 ## Scoring Policy
 

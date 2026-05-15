@@ -37,10 +37,18 @@ Do not introduce:
 For menu edits:
 
 1. Use `suggest_meal_replacements`.
-2. Present the three options.
-3. Ask the user to choose.
-4. Call `replace_meal` only after confirmation.
-5. Ask separately before week-wide propagation or profile preference saves.
+2. Treat the returned options as LLM-generated candidates that have already been deterministically validated and scored.
+3. Present the three options without claiming unvalidated nutrition.
+4. Ask the user to choose.
+5. Call `replace_meal` only after confirmation.
+6. Ask separately before week-wide propagation or profile preference saves.
+7. Use `apply_similar_replacements` after confirmation when the user wants the inferred ingredient removed from related meals.
+
+For recipe generation:
+
+- Prefer LLM-backed generation tools and structured recipe candidates.
+- Accept only candidates that the deterministic service validates for ingredients, nutrition confidence, preparation time, variety, and day/week macro fit.
+- Treat deterministic recipe templates as local fallback only when the provider is unavailable or no valid generated candidates remain.
 
 For regeneration:
 

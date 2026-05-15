@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This plan turns ADR 0001 through ADR 0008 into an implementation sequence for the first working local v1 of the weekly diet planner.
+This plan turns ADR 0001 through ADR 0009 into an implementation sequence for the first working local v1 of the weekly diet planner.
 
 The target is a Spanish-first mobile web app running locally on the user's MacBook Air M2, with a Postgres-compatible local database, deterministic macro/nutrition calculation, AI-assisted planning through a server-side Codex OAuth provider, and a local MCP server.
 
@@ -205,12 +205,14 @@ Implement:
 - Retry limit.
 - Failure states.
 - AI cache keyed by input hash, model, and schema version.
+- LLM-first recipe candidate generation with deterministic templates only as an explicit fallback.
 
 Acceptance:
 
 - A generation job can move through queued, running, completed, and failed states.
 - Failures are represented with explicit codes.
 - Structured outputs are validated before use.
+- Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 
@@ -220,20 +222,21 @@ The planner should:
 
 - Build a planning brief from a profile and target snapshot.
 - Generate or assemble a week skeleton.
-- Generate structured recipe candidates.
+- Generate structured recipe candidates through the LLM provider.
 - Match ingredients.
 - Calculate deterministic nutrition.
 - Score the week.
 - Repair simple failures.
 - Save a finalized weekly menu.
 
-It is acceptable for the earliest local implementation to use a small recipe fixture set plus the AI provider, as long as finalized menu nutrition is calculated deterministically and the architecture follows ADR 0005.
+The local deterministic recipe set is a fallback for unavailable or failed LLM generation, not the normal source of weekly menus or replacements.
 
 Acceptance:
 
 - A full week with breakfast, lunch, dinner, and snack can be generated.
 - Menu nutrition is saved as snapshots.
 - Locked items are preserved during regeneration.
+- Menu generation records whether candidates came from LLM, fallback templates, or a mixed pool.
 - Failure states surface when targets are impossible or nutrition confidence is too low.
 
 ## Phase 6.5: Hybrid Calorie Adjustment Planner
