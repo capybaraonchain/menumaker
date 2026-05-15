@@ -36,8 +36,17 @@ const sourceFileSchema = z.union([
 
 export type NutritionSourceRecord = z.infer<typeof sourceRecordSchema>
 
+interface OpenFoodFactsProductResponse {
+  status?: number
+  code?: string
+  product?: Record<string, any>
+}
+
 export function parseNutritionSourceRecords(input: unknown): NutritionSourceRecord[] {
-  const records = sourceFileSchema.parse(input)
+  return normalizeNutritionSourceRecords(sourceFileSchema.parse(input))
+}
+
+export function normalizeNutritionSourceRecords(records: NutritionSourceRecord[]): NutritionSourceRecord[] {
   const seen = new Set<string>()
   return records.map((record) => {
     const foodId = normalizeFoodId(record.foodId)
@@ -56,8 +65,9 @@ export function parseNutritionSourceRecords(input: unknown): NutritionSourceReco
 export async function importNutritionSourceRecords(records: NutritionSourceRecord[]): Promise<{ imported: number; sources: string[] }> {
   const sql = sqlClient()
   const sources = new Set<string>()
+  const normalizedRecords = normalizeNutritionSourceRecords(records)
   await sql.begin(async (tx) => {
-    for (const record of records) {
+    for (const record of normalizedRecords) {
       sources.add(record.source)
       await tx`
         insert into food_items (id, canonical_name, category)
@@ -98,7 +108,7 @@ export async function importNutritionSourceRecords(records: NutritionSourceRecor
       }
     }
   })
-  return { imported: records.length, sources: [...sources].sort() }
+  return { imported: normalizedRecords.length, sources: [...sources].sort() }
 }
 
 export async function importNutritionSourceFile(path: string): Promise<{ imported: number; sources: string[] }> {
@@ -106,8 +116,150 @@ export async function importNutritionSourceFile(path: string): Promise<{ importe
   return importNutritionSourceRecords(parseNutritionSourceRecords(JSON.parse(raw)))
 }
 
+export function openFoodFactsProductToRecord(input: OpenFoodFactsProductResponse): NutritionSourceRecord {
+  const product = input.product
+  const code = String(input.code ?? product?.code ?? '').trim()
+  if (!code || !product || input.status === 0) throw new Error(`Open Food Facts no encontró el producto ${code || '(sin código)'}.`)
+
+  const nutriments = product.nutriments ?? {}
+  const calories = numberFrom(nutriments['energy-kcal_100g'])
+    ?? (numberFrom(nutriments.energy_100g) === null ? null : round(Number(nutriments.energy_100g) / 4.184))
+  const proteinG = numberFrom(nutriments.proteins_100g)
+  const carbsG = numberFrom(nutriments.carbohydrates_100g)
+  const fatG = numberFrom(nutriments.fat_100g)
+  if (calories === null || proteinG === null || carbsG === null || fatG === null) {
+    throw new Error(`Open Food Facts ${code} no incluye macros por 100g suficientes.`)
+  }
+
+  const canonicalName = firstText([
+    product.product_name_es,
+    product.product_name,
+    product.generic_name_es,
+    product.generic_name,
+    `Producto ${code}`,
+  ])
+  const aliases = [
+    product.product_name_es,
+    product.product_name,
+    product.generic_name_es,
+    product.generic_name,
+    product.brands,
+  ].flatMap(splitAliasValue)
+  const servingGrams = servingQuantity(product)
+  return {
+    foodId: `off ${code}`,
+    canonicalName,
+    category: openFoodFactsCategory(product),
+    aliases,
+    source: 'openfoodfacts',
+    sourceId: `openfoodfacts:${code}`,
+    confidence: 'barcode',
+    per100g: {
+      calories,
+      proteinG,
+      carbsG,
+      fatG,
+      fiberG: numberFrom(nutriments.fiber_100g) ?? undefined,
+    },
+    householdUnits: servingGrams
+      ? [{
+          units: ['ración', 'porcion', 'porción', 'serving'],
+          grams: servingGrams,
+          confidence: 'barcode',
+          note: `Ración declarada en Open Food Facts para el código ${code}.`,
+        }]
+      : undefined,
+    payload: {
+      code,
+      sourceUrl: `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json`,
+      productName: canonicalName,
+      brands: product.brands,
+      categories: product.categories,
+      servingSize: product.serving_size,
+      importedAt: new Date().toISOString(),
+    },
+  }
+}
+
+export async function fetchOpenFoodFactsProduct(barcode: string): Promise<OpenFoodFactsProductResponse> {
+  const code = barcode.replace(/\D/g, '')
+  if (!code) throw new Error('Código de barras inválido para Open Food Facts.')
+  const fields = [
+    'code',
+    'product_name',
+    'product_name_es',
+    'generic_name',
+    'generic_name_es',
+    'brands',
+    'categories',
+    'categories_tags',
+    'serving_size',
+    'serving_quantity',
+    'nutriments',
+  ].join(',')
+  const hosts = ['https://world.openfoodfacts.org', 'https://world.openfoodfacts.net']
+  const failures: string[] = []
+  for (const host of hosts) {
+    const url = `${host}/api/v2/product/${encodeURIComponent(code)}.json?fields=${encodeURIComponent(fields)}`
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'MenuMaker/0.1 local nutrition import (https://github.com/capybaraonchain/menumaker)',
+        Accept: 'application/json',
+      },
+    })
+    if (response.ok) return await response.json() as OpenFoodFactsProductResponse
+    failures.push(`${host} ${response.status}`)
+  }
+  throw new Error(`Open Food Facts no respondió correctamente para ${code}: ${failures.join(', ')}.`)
+}
+
+export async function importOpenFoodFactsBarcodes(barcodes: string[]): Promise<{ imported: number; sources: string[]; records: NutritionSourceRecord[] }> {
+  const records: NutritionSourceRecord[] = []
+  for (const barcode of barcodes) {
+    records.push(openFoodFactsProductToRecord(await fetchOpenFoodFactsProduct(barcode)))
+  }
+  const result = await importNutritionSourceRecords(records)
+  return { ...result, records }
+}
+
 function normalizeFoodId(value: string): string {
   return normalizeIngredientName(value).replace(/\s+/g, '_')
+}
+
+function numberFrom(value: unknown): number | null {
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN
+  return Number.isFinite(number) && number >= 0 ? round(number) : null
+}
+
+function firstText(values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return 'Producto sin nombre'
+}
+
+function splitAliasValue(value: unknown): string[] {
+  if (typeof value !== 'string') return []
+  return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function openFoodFactsCategory(product: Record<string, any>): string {
+  const tags = Array.isArray(product.categories_tags) ? product.categories_tags : []
+  const lastTag = tags.at(-1)
+  if (typeof lastTag === 'string' && lastTag.trim()) return lastTag.replace(/^[a-z]{2}:/, '').replace(/-/g, ' ')
+  return firstText([product.categories, 'packaged'])
+}
+
+function servingQuantity(product: Record<string, any>): number | null {
+  const direct = numberFrom(product.serving_quantity)
+  if (direct) return direct
+  if (typeof product.serving_size !== 'string') return null
+  const match = product.serving_size.replace(',', '.').match(/(\d+(?:\.\d+)?)\s*(g|gr|gramos|ml)\b/i)
+  return match?.[1] ? numberFrom(match[1]) : null
+}
+
+function round(value: number): number {
+  return Math.round(value * 10) / 10
 }
 
 async function main(): Promise<void> {

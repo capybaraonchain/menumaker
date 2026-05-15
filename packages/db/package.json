@@ -12,7 +12,8 @@
     "test": "tsx --test src/*.test.ts",
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
-    "nutrition:import": "tsx src/nutritionSourceImport.ts"
+    "nutrition:import": "tsx src/nutritionSourceImport.ts",
+    "nutrition:import:off": "tsx src/openFoodFactsImport.ts"
   },
   "dependencies": {
     "@menumaker/ai": "0.1.0",

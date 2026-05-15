@@ -99,6 +99,7 @@ Acceptance:
 - Generated-output tables, including AI cache, are scoped by `user_id`.
 - Schema ownership tests prevent adding user-owned tables without direct local ownership coverage.
 - Nutrition source tables have idempotent `(food_id, source_id)` records and can be populated through `npm --workspace @menumaker/db run nutrition:import -- ./foods.json`.
+- Open Food Facts barcode products can be fetched and imported with `npm --workspace @menumaker/db run nutrition:import:off -- <barcode>`.
 - App scoring reads the source-backed nutrition catalog from Postgres; seed foods remain the fallback baseline when no source records exist.
 
 ## Phase 2: Core Domain And Macro Policy
@@ -270,7 +271,7 @@ The planner should:
 
 The local deterministic recipe set is a fallback for unavailable or failed LLM generation, not the normal source of weekly menus or replacements.
 
-Nutrition source records are similarly not a mock-only schema. Local v1 can import normalized BEDCA/USDA/Open Food Facts-style JSON records into `source_foods`, `nutrition_records`, and `food_mappings`; generation, meal editing, and calorie adjustment then score against that database catalog. The seed catalog remains a baseline for local setup and tests.
+Nutrition source records are similarly not a mock-only schema. Local v1 can import normalized BEDCA/USDA/Open Food Facts-style JSON records into `source_foods`, `nutrition_records`, and `food_mappings`, and can fetch Open Food Facts packaged products directly by barcode. Generation, meal editing, and calorie adjustment then score against that database catalog. The seed catalog remains a baseline for local setup and tests.
 
 Acceptance:
 

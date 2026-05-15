@@ -166,11 +166,19 @@ npm --workspace @menumaker/db run nutrition:import -- ./foods.json
 
 The import is idempotent on `(food_id, source_id)`. App scoring builds a nutrition catalog from `food_items`, `food_aliases`, `source_foods`, and `nutrition_records`; non-seed sources are preferred over seed records for the same canonical food. Seed data remains the baseline when no imported source record exists.
 
+Open Food Facts barcode products can also be fetched directly:
+
+```bash
+npm --workspace @menumaker/db run nutrition:import:off -- 3017620422003
+```
+
+The Open Food Facts adapter uses the public product-by-barcode API, imports per-100g macros from `nutriments`, stores the barcode as the source ID, and marks confidence as `barcode`.
+
 ## V1 Source Plan
 
 For v1:
 
-- Use Open Food Facts for barcode and packaged-product matches.
+- Use Open Food Facts for barcode and packaged-product matches. Local v1 includes the barcode import command; app UI search/scanning can be added later.
 - Use USDA FoodData Central for robust generic food coverage.
 - Include a BEDCA adapter boundary.
 - Implement BEDCA if access or import is straightforward. The generic normalized import path exists first; official dataset-specific adapters should emit that format.
