@@ -7,6 +7,9 @@ import {
 } from '@menumaker/core'
 import {
   appActionMetadata,
+  cancelPendingAction,
+  confirmPendingAction,
+  createPendingAction,
   createProfileAndFirstMenu,
   createWeeklyMenu,
   executeAppAction,
@@ -39,6 +42,16 @@ const server = new McpServer({
   name: 'menumaker',
   version: '0.1.0',
 })
+
+const pendingActionNames = [
+  'applyCalorieTargetChange',
+  'regenerateWeek',
+  'regenerateDay',
+  'regenerateMeal',
+  'savePreference',
+  'replaceMeal',
+  'applySimilarReplacements',
+] as const
 
 function json(value: unknown) {
   return {
@@ -125,6 +138,39 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   async () => json(appActionMetadata()),
+)
+
+server.registerTool(
+  'create_pending_action',
+  {
+    description: 'Create a server-owned pending MenuMaker action and return Spanish confirmation copy plus a pendingActionId. Does not perform the underlying mutation.',
+    inputSchema: {
+      actionName: z.enum(pendingActionNames),
+      params: z.record(z.unknown()),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ actionName, params }) => json(await createPendingAction(actionName, params, 'mcp')),
+)
+
+server.registerTool(
+  'confirm_pending_action',
+  {
+    description: 'Confirm and execute a previously created pending MenuMaker action.',
+    inputSchema: { pendingActionId: z.string().uuid() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ pendingActionId }) => json(await confirmPendingAction(pendingActionId)),
+)
+
+server.registerTool(
+  'cancel_pending_action',
+  {
+    description: 'Cancel a previously created pending MenuMaker action without changing the menu.',
+    inputSchema: { pendingActionId: z.string().uuid() },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ pendingActionId }) => json(await cancelPendingAction(pendingActionId)),
 )
 
 server.registerTool(

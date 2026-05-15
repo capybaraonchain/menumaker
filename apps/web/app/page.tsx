@@ -154,19 +154,43 @@ export default function App() {
     })
     const data = await res.json()
     setChatBusy(null)
+    clearChatAction(action.id)
     if (!res.ok) {
       setChatMessages((items) => [...items, { role: 'assistant', text: data.error ?? 'No pude completar la acción.' }])
       return
     }
     if (data.state) setState(data.state)
     setPendingChatAction(null)
+    const markdown = typeof data.result?.markdown === 'string' ? data.result.markdown : chatActionSuccessText(action)
     setChatMessages((items) => [
       ...items,
       {
         role: 'assistant',
-        text: chatActionSuccessText(action),
+        text: markdown,
       },
     ])
+  }
+
+  async function cancelChatAction(action: ChatAction) {
+    setPendingChatAction(null)
+    clearChatAction(action.id)
+    if (!action.payload.pendingActionId) {
+      setChatMessages((items) => [...items, { role: 'assistant', text: 'Cancelado. No cambio el menú.' }])
+      return
+    }
+    const res = await fetch('/api/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'cancelPendingAction', pendingActionId: action.payload.pendingActionId }),
+    })
+    const data = await res.json()
+    setChatMessages((items) => [...items, { role: 'assistant', text: data.result?.markdown ?? 'Cancelado. No cambio el menú.' }])
+  }
+
+  function clearChatAction(actionId: string) {
+    setChatMessages((items) => items.map((message) => message.actions
+      ? { ...message, actions: message.actions.filter((action) => action.id !== actionId) }
+      : message))
   }
 
   if (loading) return <LoadingScreen />
@@ -313,10 +337,7 @@ export default function App() {
                           <button className="primary" disabled={chatBusy === action.id} onClick={() => runChatAction(action)}>
                             <Check size={16} /> {chatBusy === action.id ? 'Ejecutando...' : action.label}
                           </button>
-                          <button className="secondary" type="button" onClick={() => {
-                            setPendingChatAction(null)
-                            setChatMessages((items) => [...items, { role: 'assistant', text: 'Cancelado. No cambio el menú.' }])
-                          }}>
+                          <button className="secondary" type="button" onClick={() => cancelChatAction(action)}>
                             <X size={16} /> Cancelar
                           </button>
                         </div>
@@ -330,15 +351,15 @@ export default function App() {
               event.preventDefault()
               const message = chatInput.trim()
               if (!message) return
+              const activePendingAction = pendingChatAction ?? latestPendingChatAction(chatMessages)
               setChatMessages((items) => [...items, { role: 'user', text: message }])
               setChatInput('')
-              if (pendingChatAction && isAffirmative(message)) {
-                await runChatAction(pendingChatAction)
+              if (activePendingAction && isAffirmative(message)) {
+                await runChatAction(activePendingAction)
                 return
               }
-              if (pendingChatAction && isNegative(message)) {
-                setPendingChatAction(null)
-                setChatMessages((items) => [...items, { role: 'assistant', text: 'Perfecto, no cambio el menú.' }])
+              if (activePendingAction && isNegative(message)) {
+                await cancelChatAction(activePendingAction)
                 return
               }
               const res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ profileId: activeProfileId, message }) })
@@ -605,11 +626,23 @@ function InlineMarkdown({ text }: { text: string }) {
 }
 
 function isAffirmative(value: string): boolean {
-  return /^(si|sí|confirmo|confirmar|ok|vale|dale|continua|continuar|hazlo|adelante)\b/i.test(value.trim())
+  return /^(si|confirmo|confirmar|ok|vale|dale|continua|continuar|hazlo|adelante)\b/i.test(normalizeChatInput(value))
 }
 
 function isNegative(value: string): boolean {
-  return /^(no|cancelar|cancela|para|espera)\b/i.test(value.trim())
+  return /^(no|cancelar|cancela|para|espera)\b/i.test(normalizeChatInput(value))
+}
+
+function normalizeChatInput(value: string): string {
+  return value.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
+
+function latestPendingChatAction(messages: ChatMessage[]): ChatAction | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const action = messages[index]?.actions?.[0]
+    if (action) return action
+  }
+  return null
 }
 
 function chatActionSuccessText(action: ChatAction): string {

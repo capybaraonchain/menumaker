@@ -214,6 +214,37 @@ create table if not exists generation_jobs (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists pending_actions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id),
+  profile_id uuid references profiles(id),
+  action_name text not null,
+  params jsonb not null default '{}',
+  confirmation_markdown text not null,
+  status text not null,
+  source text not null,
+  result jsonb not null default '{}',
+  error text,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  resolved_at timestamptz
+);
+
+create table if not exists action_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id),
+  profile_id uuid references profiles(id),
+  pending_action_id uuid references pending_actions(id),
+  action_name text not null,
+  audit_label text not null,
+  status text not null,
+  source text not null,
+  input jsonb not null default '{}',
+  output jsonb not null default '{}',
+  error text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists ai_cache (
   id uuid primary key default gen_random_uuid(),
   input_hash text not null,
@@ -229,6 +260,8 @@ create index if not exists idx_weekly_menus_profile on weekly_menus(profile_id);
 create index if not exists idx_day_plans_menu on day_plans(weekly_menu_id);
 create index if not exists idx_menu_meals_day on menu_meals(day_plan_id);
 create index if not exists idx_generation_jobs_user on generation_jobs(user_id);
+create index if not exists idx_pending_actions_user_status on pending_actions(user_id, status);
+create index if not exists idx_action_events_user on action_events(user_id, created_at);
 `
 
 async function main(): Promise<void> {
@@ -243,4 +276,3 @@ main().catch(async (error) => {
   await closeDb()
   process.exit(1)
 })
-

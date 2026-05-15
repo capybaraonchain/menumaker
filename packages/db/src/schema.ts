@@ -210,6 +210,37 @@ export const generationJobs = pgTable('generation_jobs', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+export const pendingActions = pgTable('pending_actions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  profileId: uuid('profile_id').references(() => profiles.id),
+  actionName: text('action_name').notNull(),
+  params: jsonb('params').notNull(),
+  confirmationMarkdown: text('confirmation_markdown').notNull(),
+  status: text('status').notNull(),
+  source: text('source').notNull(),
+  result: jsonb('result').notNull(),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+})
+
+export const actionEvents = pgTable('action_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  profileId: uuid('profile_id').references(() => profiles.id),
+  pendingActionId: uuid('pending_action_id').references(() => pendingActions.id),
+  actionName: text('action_name').notNull(),
+  auditLabel: text('audit_label').notNull(),
+  status: text('status').notNull(),
+  source: text('source').notNull(),
+  input: jsonb('input').notNull(),
+  output: jsonb('output').notNull(),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const aiCache = pgTable('ai_cache', {
   id: uuid('id').primaryKey().defaultRandom(),
   inputHash: text('input_hash').notNull(),
@@ -218,4 +249,3 @@ export const aiCache = pgTable('ai_cache', {
   output: jsonb('output').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
-
