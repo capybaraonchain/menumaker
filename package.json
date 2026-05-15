@@ -12,6 +12,7 @@
     "dev:web": "npm --workspace @menumaker/web run dev",
     "dev:mcp": "npm --workspace @menumaker/mcp run dev",
     "build": "npm --workspaces --if-present run build",
+    "test": "npm --workspaces --if-present run test",
     "typecheck": "npm --workspaces --if-present run typecheck",
     "lint": "npm --workspaces --if-present run lint",
     "db:ensure": "createdb menumaker 2>/dev/null || true",
@@ -26,4 +27,3 @@
     "typescript": "~5.9.3"
   }
 }
-

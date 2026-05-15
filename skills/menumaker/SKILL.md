@@ -49,9 +49,16 @@ For regeneration:
 3. Regenerate only after confirmation.
 4. Report what changed and whether locks were preserved.
 
+For calorie target changes:
+
+1. Use `preview_calorie_adjustment_plan` before mutation.
+2. Explain the plan in Spanish for Spanish profiles: porciones, rebalances, replacements, preserved locks, weekly impact, and warnings.
+3. Do not claim a replacement recipe fits until the deterministic service has validated day and week impact.
+4. Call `apply_calorie_target_change` only after confirmation, passing the previewed plan when available.
+5. If the apply call says the menu changed, generate a fresh preview instead of retrying the stale plan.
+
 For macro questions:
 
 1. Inspect profile and macro targets.
 2. Use nutrition snapshots or `analyze_recipe_nutrition`.
 3. Explain uncertainty if confidence is not deterministic.
-

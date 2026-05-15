@@ -278,7 +278,7 @@ server.registerTool(
 server.registerTool(
   'propose_calorie_target_change',
   {
-    description: 'Proposal: prepare a calorie target change confirmation using the shared app action registry. Does not mutate state.',
+    description: 'Proposal: prepare a calorie target change confirmation using the shared app action registry. Includes a hybrid adjustment plan and does not mutate state.',
     inputSchema: { profileId: z.string().uuid(), calories: z.number().int().min(900).max(5000) },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
@@ -286,15 +286,30 @@ server.registerTool(
 )
 
 server.registerTool(
+  'preview_calorie_adjustment_plan',
+  {
+    description: 'Proposal: build a hybrid calorie adjustment plan with per-meal decisions, weekly/daily macro impact, warnings, and Spanish confirmation copy. Does not mutate state.',
+    inputSchema: { profileId: z.string().uuid(), calories: z.number().int().min(900).max(5000) },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ profileId, calories }) => json(await executeAppAction('proposeCalorieAdjustmentPlan', { profileId, calories })),
+)
+
+server.registerTool(
   'apply_calorie_target_change',
   {
-    description: 'Mutation: save a new calorie target and regenerate the week through the shared app action registry. Requires confirmed=true.',
-    inputSchema: { profileId: z.string().uuid(), calories: z.number().int().min(900).max(5000), confirmed: z.boolean() },
+    description: 'Mutation: save a new calorie target and apply a hybrid calorie adjustment plan through the shared app action registry. Pass the preview plan when available. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      calories: z.number().int().min(900).max(5000),
+      plan: z.any().optional(),
+      confirmed: z.boolean(),
+    },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
-  async ({ profileId, calories, confirmed }) => {
+  async ({ profileId, calories, plan, confirmed }) => {
     requireConfirmation(confirmed, 'calorie target change')
-    return json(await executeAppAction('applyCalorieTargetChange', { profileId, calories }))
+    return json(await executeAppAction('applyCalorieTargetChange', { profileId, calories, plan }))
   },
 )
 

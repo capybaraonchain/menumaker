@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import {
-  adjustCaloriesAndRegenerateWeek,
+  applyCalorieAdjustmentPlan,
   applySimilarIngredientReplacements,
   getAppState,
   getCurrentMenu,
@@ -15,8 +15,10 @@ import {
   starRecipe,
   suggestMealReplacements,
   unstarRecipe,
+  previewCalorieAdjustmentPlan,
   type WeeklyMenuView,
 } from './appService'
+import type { CalorieAdjustmentPlan } from './caloriePlanner'
 import { sqlClient } from './client'
 import { localUserId } from './env'
 
@@ -41,6 +43,10 @@ const recipeCandidateSchema = z.object({
 })
 
 export const appActionSchemas = {
+  proposeCalorieAdjustmentPlan: z.object({
+    profileId: uuid,
+    calories: z.number().int().min(900).max(5000),
+  }),
   proposeCalorieTargetChange: z.object({
     profileId: uuid,
     calories: z.number().int().min(900).max(5000),
@@ -48,6 +54,7 @@ export const appActionSchemas = {
   applyCalorieTargetChange: z.object({
     profileId: uuid,
     calories: z.number().int().min(900).max(5000),
+    plan: z.any().optional(),
   }),
   regenerateWeek: z.object({
     profileId: uuid.optional(),
@@ -149,27 +156,47 @@ function appStateResult(profileId?: string) {
 }
 
 export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<Name> } = {
+  proposeCalorieAdjustmentPlan: {
+    name: 'proposeCalorieAdjustmentPlan',
+    inputSchema: appActionSchemas.proposeCalorieAdjustmentPlan,
+    requiresConfirmation: false,
+    auditLabel: 'proposal.calorie_adjustment_plan',
+    confirmationCopyEs: async (input) => (await previewCalorieAdjustmentPlan(input.profileId, input.calories)).confirmationMarkdown,
+    successCopyEs: (_, result) => resultChangeSummary(result) || 'Plan de reajuste preparado.',
+    async execute(input) {
+      const plan = await previewCalorieAdjustmentPlan(input.profileId, input.calories)
+      return {
+        type: 'calorie_adjustment_plan',
+        markdown: plan.confirmationMarkdown,
+        plan,
+        affectedMealIds: plan.affectedMealIds,
+        decisionCounts: plan.decisionCounts,
+        warnings: plan.warnings,
+        requiresConfirmation: true,
+      }
+    },
+  },
   proposeCalorieTargetChange: {
     name: 'proposeCalorieTargetChange',
     inputSchema: appActionSchemas.proposeCalorieTargetChange,
     requiresConfirmation: false,
     auditLabel: 'proposal.calorie_target_change',
-    confirmationCopyEs: calorieTargetConfirmation,
+    confirmationCopyEs: async (input) => (await previewCalorieAdjustmentPlan(input.profileId, input.calories)).confirmationMarkdown,
     successCopyEs: (_, result) => actionResultSummary('proposeCalorieTargetChange', result),
     async execute(input) {
-      const state = await getAppState(input.profileId)
-      const currentCalories = state.currentMenu?.target.calories
+      const plan = await previewCalorieAdjustmentPlan(input.profileId, input.calories)
       return {
         type: 'confirmation_required',
-        markdown: await calorieTargetConfirmation(input),
+        markdown: plan.confirmationMarkdown,
         action: {
           name: 'applyCalorieTargetChange',
-          params: input,
+          params: { ...input, plan },
           requiresConfirmation: true,
           auditLabel: 'mutation.calorie_target_change',
         },
-        currentCalories,
+        currentCalories: plan.baseCalories,
         requestedCalories: input.calories,
+        plan,
       }
     },
   },
@@ -178,18 +205,18 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     inputSchema: appActionSchemas.applyCalorieTargetChange,
     requiresConfirmation: true,
     auditLabel: 'mutation.calorie_target_change',
-    confirmationCopyEs: calorieTargetConfirmation,
+    confirmationCopyEs: calorieAdjustmentConfirmation,
     successCopyEs: (input, result) => [
-      `Listo. Ajusté el objetivo a **${input.calories} kcal/día** y regeneré la semana usando el proceso real de creación de menús, respetando los elementos bloqueados.`,
+      `Listo. Apliqué el reajuste híbrido a **${input.calories} kcal/día** respetando locks y validando el menú completo.`,
       resultChangeSummary(result),
     ].filter(Boolean).join('\n\n'),
     async execute(input) {
-      const before = await getCurrentMenu(input.profileId)
-      const adjustedMenu = await adjustCaloriesAndRegenerateWeek(input.profileId, input.calories)
+      const applied = await applyCalorieAdjustmentPlan(input.profileId, input.calories, caloriePlanFromInput(input))
       return {
         state: await appStateResult(input.profileId),
-        menu: adjustedMenu,
-        changeSummary: summarizeMenuChanges(before, adjustedMenu),
+        menu: applied.menu,
+        plan: applied.plan,
+        changeSummary: applied.changeSummary,
       }
     },
   },
@@ -390,7 +417,7 @@ export async function createPendingAction<Name extends AppActionName>(
 ): Promise<PendingActionView> {
   const definition = appActionRegistry[name]
   if (!definition.requiresConfirmation) throw new Error(`${name} does not require a pending confirmation.`)
-  const input = definition.inputSchema.parse(rawInput)
+  const input = await preparePendingInput(name, definition.inputSchema.parse(rawInput))
   const confirmationMarkdown = await definition.confirmationCopyEs(input as never)
   const profileId = profileIdFromInput(input)
   const sql = sqlClient()
@@ -416,6 +443,14 @@ export async function createPendingAction<Name extends AppActionName>(
     source,
     expires_at: String(row.expires_at),
   })
+}
+
+async function preparePendingInput<Name extends AppActionName>(name: Name, input: AppActionInput<Name>): Promise<AppActionInput<Name>> {
+  if (name !== 'applyCalorieTargetChange') return input
+  const calorieInput = input as AppActionInput<'applyCalorieTargetChange'>
+  if (calorieInput.plan) return input
+  const plan = await previewCalorieAdjustmentPlan(calorieInput.profileId, calorieInput.calories)
+  return { ...calorieInput, plan } as AppActionInput<Name>
 }
 
 export async function confirmPendingAction(pendingActionId: string): Promise<{
@@ -511,7 +546,8 @@ function pendingActionView(row: {
 
 function actionLabelEs(name: AppActionName, input: unknown): string {
   const params = input && typeof input === 'object' ? input as Record<string, unknown> : {}
-  if (name === 'applyCalorieTargetChange') return `Reajustar a ${params.calories} kcal/día`
+  if (name === 'applyCalorieTargetChange') return `Aplicar reajuste a ${params.calories} kcal/día`
+  if (name === 'proposeCalorieAdjustmentPlan') return 'Preparar reajuste'
   if (name === 'regenerateWeek') return 'Regenerar semana'
   if (name === 'regenerateDay') return 'Regenerar día'
   if (name === 'regenerateMeal') return 'Regenerar comida'
@@ -630,6 +666,27 @@ function formatSigned(value: number): string {
 
 function round1(value: number): number {
   return Math.round(value * 10) / 10
+}
+
+async function calorieAdjustmentConfirmation(input: AppActionInput<'applyCalorieTargetChange'>): Promise<string> {
+  const plan = caloriePlanFromInput(input) ?? await previewCalorieAdjustmentPlan(input.profileId, input.calories)
+  return plan.confirmationMarkdown
+}
+
+function caloriePlanFromInput(input: AppActionInput<'applyCalorieTargetChange'>): CalorieAdjustmentPlan | undefined {
+  if (!input.plan || typeof input.plan !== 'object') return undefined
+  const plan = input.plan as Partial<CalorieAdjustmentPlan>
+  if (
+    typeof plan.planId === 'string' &&
+    typeof plan.profileId === 'string' &&
+    typeof plan.baseMenuId === 'string' &&
+    typeof plan.baseMenuHash === 'string' &&
+    typeof plan.targetCalories === 'number' &&
+    Array.isArray(plan.decisions)
+  ) {
+    return input.plan as CalorieAdjustmentPlan
+  }
+  return undefined
 }
 
 async function calorieTargetConfirmation(input: AppActionInput<'proposeCalorieTargetChange'>): Promise<string> {

@@ -154,6 +154,21 @@ Repair actions may include:
 
 The repair loop must have a retry limit. If the retry limit is reached, the generation job should return a clear failure state instead of looping indefinitely.
 
+## Calorie Adjustment Rebalancing
+
+Changing a calorie target should use the policy from ADR 0009.
+
+The planner should create a previewed `CalorieAdjustmentPlan` before mutation. The plan evaluates each meal as one of:
+
+- Portion resize.
+- Ingredient rebalance.
+- Recipe replacement.
+- Locked preservation.
+
+The selected plan must be scored against the whole menu, not only the changed meal. Daily targets may vary naturally, but weekly calories/macros, protein minimums, fat minimums, volume, satiety, variety, preferences, and locks must be considered before finalization.
+
+If the menu changes after preview, the pending plan must be rejected and regenerated.
+
 ## Finalization
 
 When a menu passes validation, save:

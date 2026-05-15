@@ -1,5 +1,6 @@
 export * from './appActions'
 export * from './appService'
+export * from './caloriePlanner'
 export * from './client'
 export * from './env'
 export * from './schema'

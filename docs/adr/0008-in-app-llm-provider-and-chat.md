@@ -147,6 +147,8 @@ The chat should not silently mutate:
 
 When chat infers a durable change, it should return or trigger a proposal that the user can confirm.
 
+For calorie target changes, chat should use the calorie adjustment policy from ADR 0009. The assistant should show a summarized plan before confirmation, including portion changes, ingredient rebalances, recipe replacements, preserved locks, macro impact, and warnings. The chat should not apply the target change until the user confirms the pending action.
+
 ## Local Runtime
 
 For v1, the LLM provider runs from the local server process alongside the web app and local database.

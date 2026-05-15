@@ -15,6 +15,12 @@ import {
   type Sex,
 } from '@menumaker/core'
 import { scoreRecipe, sumNutrition, templatesForSlot } from '@menumaker/nutrition'
+import {
+  buildCalorieAdjustmentPlan,
+  currentMenuHash,
+  type CalorieAdjustmentPlan,
+  type CaloriePlannerMenu,
+} from './caloriePlanner'
 import { closeDb, sqlClient } from './client'
 import { localUserId } from './env'
 
@@ -135,6 +141,12 @@ export interface SimilarReplacementResult {
   replacedMealIds: string[]
   skippedLockedMealIds: string[]
   menu: WeeklyMenuView | null
+}
+
+export interface AppliedCalorieAdjustmentResult {
+  menu: WeeklyMenuView
+  plan: CalorieAdjustmentPlan
+  changeSummary: string
 }
 
 export interface ProfileUpdateInput {
@@ -454,7 +466,38 @@ export async function regenerateWeek(menuId: string): Promise<WeeklyMenuView> {
   return getWeeklyMenu(regenerated.id)
 }
 
-export async function adjustCaloriesAndRegenerateWeek(profileId: string, calories: number): Promise<WeeklyMenuView> {
+export async function previewCalorieAdjustmentPlan(profileId: string, calories: number): Promise<CalorieAdjustmentPlan> {
+  const current = await getCurrentMenu(profileId)
+  if (!current) throw new Error('Menú no encontrado.')
+  if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
+    throw new Error('El objetivo calórico debe estar entre 900 y 5000 kcal/día.')
+  }
+
+  const target = retargetCalories(current.target, Math.round(calories))
+  const conflict = impossibleTargetConflict(target)
+  if (conflict.impossible) throw new Error(conflict.messageEs)
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  const savedRecipeIds = (await getSavedRecipes(profileId)).map((item) => item.recipe.id)
+  return buildCalorieAdjustmentPlan({
+    profile: {
+      id: profile.id,
+      locale: profile.locale,
+      likes: profile.likes,
+      dislikes: profile.dislikes,
+      bannedFoods: profile.bannedFoods,
+    },
+    currentMenu: toPlannerMenu(current),
+    target,
+    savedRecipeIds,
+  })
+}
+
+export async function adjustCaloriesAndRegenerateWeek(profileId: string, calories: number, plan?: CalorieAdjustmentPlan): Promise<WeeklyMenuView> {
+  return (await applyCalorieAdjustmentPlan(profileId, calories, plan)).menu
+}
+
+export async function applyCalorieAdjustmentPlan(profileId: string, calories: number, plan?: CalorieAdjustmentPlan): Promise<AppliedCalorieAdjustmentResult> {
   const current = await getCurrentMenu(profileId)
   if (!current) throw new Error('Menú no encontrado.')
   if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
@@ -465,11 +508,23 @@ export async function adjustCaloriesAndRegenerateWeek(profileId: string, calorie
   const conflict = impossibleTargetConflict(target)
   if (conflict.impossible) throw new Error(conflict.messageEs)
 
+  const resolvedPlan = plan ?? await previewCalorieAdjustmentPlan(profileId, calories)
+  if (resolvedPlan.profileId !== profileId || resolvedPlan.targetCalories !== target.calories) {
+    throw new Error('El plan de reajuste no corresponde a este perfil u objetivo calórico.')
+  }
+  if (resolvedPlan.baseMenuId !== current.id || resolvedPlan.baseMenuHash !== currentMenuHash(toPlannerMenu(current))) {
+    throw new Error('El menú cambió desde que preparé el reajuste. Vuelve a pedir el cambio para generar un plan actualizado.')
+  }
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+
   const targetId = await saveMacroTarget(profileId, target)
-  const { locked, lockedDays } = lockedItemsFromMenu(current)
-  const regenerated = await createWeeklyMenu(profileId, targetId, target, 'chat_calorie_target_adjustment')
-  await applyLockedMeals(regenerated, locked, lockedDays)
-  return getWeeklyMenu(regenerated.id)
+  const menu = await createWeeklyMenuFromCalorieAdjustmentPlan(profile, targetId, target, resolvedPlan)
+  return {
+    menu,
+    plan: resolvedPlan,
+    changeSummary: appliedSummaryFromPlan(resolvedPlan),
+  }
 }
 
 export async function regenerateDay(dayPlanId: string): Promise<WeeklyMenuView> {
@@ -635,6 +690,61 @@ export async function getSavedRecipes(profileId: string): Promise<SavedRecipeVie
 
 export async function shutdown(): Promise<void> {
   await closeDb()
+}
+
+async function createWeeklyMenuFromCalorieAdjustmentPlan(
+  profile: ProfileRow,
+  targetId: string,
+  target: MacroTargets,
+  plan: CalorieAdjustmentPlan,
+): Promise<WeeklyMenuView> {
+  const sql = sqlClient()
+  const [menu] = await sql<[{ id: string }]>`
+    insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
+    values (
+      ${localUserId()}, ${profile.id}, ${targetId}, ${currentWeekStart()}, ${profile.locale}, 'completed',
+      ${sql.json({
+        kind: 'hybrid_calorie_adjustment',
+        planId: plan.planId,
+        baseMenuId: plan.baseMenuId,
+        baseMenuHash: plan.baseMenuHash,
+        decisionCounts: plan.decisionCounts,
+        weeklyImpact: plan.weeklyImpact,
+        warnings: plan.warnings,
+      } as any)},
+      ${sql.json(plan.plannedWeeklyNutrition as any)}
+    )
+    returning id
+  `
+  if (!menu) throw new Error('No se pudo crear el menú reajustado.')
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const dayDecisions = plan.decisions
+      .filter((decision) => decision.dayIndex === dayIndex)
+      .sort((left, right) => mealSlots.indexOf(left.slot) - mealSlots.indexOf(right.slot))
+    const [day] = await sql<[{ id: string }]>`
+      insert into day_plans (user_id, weekly_menu_id, day_index, locked, nutrition_snapshot)
+      values (
+        ${localUserId()}, ${menu.id}, ${dayIndex}, ${dayDecisions.some((decision) => decision.dayLocked)},
+        ${sql.json(sumNutrition(dayDecisions.map((decision) => decision.nutrition)) as any)}
+      )
+      returning id
+    `
+    if (!day) throw new Error('No se pudo crear el día reajustado.')
+
+    for (const decision of dayDecisions) {
+      const recipeId = decision.kind === 'preserve_locked' && decision.existingRecipeId
+        ? decision.existingRecipeId
+        : await persistRecipe(scoreRecipe(decision.recipe, profile.bannedFoods), decision.kind)
+      await sql`
+        insert into menu_meals (user_id, day_plan_id, recipe_id, slot, locked, nutrition_snapshot)
+        values (${localUserId()}, ${day.id}, ${recipeId}, ${decision.slot}, ${decision.locked}, ${sql.json(decision.nutrition as any)})
+      `
+    }
+  }
+
+  await recalculateMenuNutrition(menu.id)
+  return getWeeklyMenu(menu.id)
 }
 
 function buildRecipesForDay(profile: ProfileRow, dayIndex: number, targets: MacroTargets): Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }> {
@@ -890,6 +1000,53 @@ function diffNutrition(next: NutritionTotals, previous: NutritionTotals): Nutrit
     fiberG: round((next.fiberG ?? 0) - (previous.fiberG ?? 0)),
     confidence: next.confidence,
   }
+}
+
+function toPlannerMenu(menu: WeeklyMenuView): CaloriePlannerMenu {
+  return {
+    id: menu.id,
+    profileId: menu.profileId,
+    weekStart: menu.weekStart,
+    locale: menu.locale,
+    nutrition: menu.nutrition,
+    target: menu.target,
+    days: menu.days.map((day) => ({
+      id: day.id,
+      dayIndex: day.dayIndex,
+      locked: day.locked,
+      meals: day.meals.map((meal) => ({
+        id: meal.id,
+        slot: meal.slot,
+        locked: meal.locked,
+        nutrition: meal.nutrition,
+        recipe: {
+          id: meal.recipe.id,
+          title: meal.recipe.title,
+          locale: meal.recipe.locale === 'en' ? 'en' : 'es',
+          description: meal.recipe.description,
+          servings: 1,
+          prepTimeMinutes: meal.recipe.prepTimeMinutes,
+          cuisine: meal.recipe.cuisine,
+          flavorProfile: meal.recipe.flavorProfile,
+          tags: meal.recipe.tags,
+          ingredients: meal.recipe.ingredients.map((ingredient) => ({
+            name: ingredient.name,
+            amount: ingredient.amount,
+            unit: ingredient.unit,
+            preparation: ingredient.preparation ?? undefined,
+          })),
+          steps: meal.recipe.steps,
+          nutrition: meal.recipe.nutrition,
+        },
+      })),
+    })),
+  }
+}
+
+function appliedSummaryFromPlan(plan: CalorieAdjustmentPlan): string {
+  return plan.summaryMarkdown
+    .replace('Preparé un reajuste', 'Apliqué un reajuste')
+    .replace('Todavía no he cambiado el menú.', 'El menú ya quedó actualizado.')
 }
 
 function round(value: number): number {

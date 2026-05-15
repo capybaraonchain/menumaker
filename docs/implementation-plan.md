@@ -236,6 +236,26 @@ Acceptance:
 - Locked items are preserved during regeneration.
 - Failure states surface when targets are impossible or nutrition confidence is too low.
 
+## Phase 6.5: Hybrid Calorie Adjustment Planner
+
+Implement ADR 0009.
+
+The planner should:
+
+- Preview calorie target changes before mutation.
+- Decide per meal between portion resize, ingredient rebalance, recipe replacement, or locked preservation.
+- Score candidates against daily and weekly macro targets, satiety, volume, preferences, variety, locks, and change cost.
+- Store the previewed plan inside the pending action and reject confirmation if the base menu changed.
+- Save adjustment metadata in weekly menu generation settings.
+
+Acceptance:
+
+- Chat shows a calorie adjustment plan before applying it.
+- Confirmed changes apply the exact previewed plan.
+- Locked meals and days remain unchanged.
+- The response explains what changed and why.
+- MCP exposes the same preview/apply flow.
+
 ## Phase 7: Web App UX
 
 Implement ADR 0006 screens.
@@ -369,4 +389,3 @@ Acceptance:
 - Multi-profile shared meals.
 - Hosted sync and hosted auth.
 - Full USDA/Open Food Facts/BEDCA coverage beyond the v1 adapter boundaries and seed coverage needed for local behavior.
-

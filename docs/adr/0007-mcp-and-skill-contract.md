@@ -61,6 +61,7 @@ Proposal tools:
 - `preview_regenerate_day`
 - `preview_regenerate_week`
 - `preview_profile_preference_update`
+- `preview_calorie_adjustment_plan`
 
 Mutation tools change durable state.
 
@@ -77,6 +78,7 @@ Mutation tools:
 - `star_recipe`
 - `unstar_recipe`
 - `save_profile_preference`
+- `apply_calorie_target_change`
 
 ## Confirmation Rules
 
@@ -97,6 +99,7 @@ Examples:
 - Applying similar broccoli replacements across the whole week requires explicit confirmation.
 - Saving "broccoli" as a profile dislike or ban requires explicit confirmation.
 - Regenerating the whole week requires confirmation and must preserve locked days and meals.
+- Changing calorie targets requires a calorie adjustment preview when possible. The confirmed mutation should apply the previewed plan and reject it if the menu changed after preview.
 
 ## Mutation Return Shape
 
@@ -108,6 +111,7 @@ Every mutation should return:
 - Whether locked meals and locked days were preserved.
 - Nutrition confidence warnings when relevant.
 - Next suggested action, if useful.
+- For calorie target changes: counts of portion resizes, ingredient rebalances, recipe replacements, preserved locks, weekly impact, daily warnings, and a Spanish explanation summary.
 
 Mutation tools should be idempotent where practical.
 
@@ -168,6 +172,9 @@ The companion skill should instruct agents to:
 - Ask for confirmation before profile-wide or week-wide changes.
 - Treat generated menus and regenerations as async jobs.
 - Explain impossible targets by showing the calorie conflict between protein, minimum fat, and calorie target.
+- Preview calorie target changes with `preview_calorie_adjustment_plan` before mutation.
+- Explain whether a calorie adjustment changed portions, rebalanced ingredients, or replaced recipes.
+- Validate replacement recipes against the day and week, not only the single meal.
 - Keep responses focused on weekly diet planning, not pantry, shopping, or medical nutrition.
 
 The skill should discourage agents from:

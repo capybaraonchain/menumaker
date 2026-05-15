@@ -199,6 +199,9 @@ Local v1 generation is synchronous enough that a full async progress surface wou
 - [x] Chat does not silently mutate profile preferences.
 - [x] Chat does not silently mutate weekly menus.
 - [x] Chat does not silently mutate locks or starred recipes.
+- [x] Chat previews calorie target changes before applying them.
+- [x] Calorie target changes explain porciones, rebalances, replacements, locks, and macro impact.
+- [x] Pending calorie plans are rejected if the menu changed before confirmation.
 
 ## 14. MCP Server And Skill
 
@@ -211,12 +214,14 @@ Local v1 generation is synchronous enough that a full async progress surface wou
 - [x] `get_weekly_menu` works.
 - [x] `analyze_recipe_nutrition` works.
 - [x] `suggest_meal_replacements` works.
+- [x] `preview_calorie_adjustment_plan` works.
 - [x] Mutation tools preserve locks and product rules.
 - [x] Broad/persistent MCP changes require confirmation.
 - [x] Companion skill exists.
 - [x] Skill instructs agents to use deterministic nutrition before macro claims.
 - [x] Skill instructs agents to respect profile locale.
 - [x] Skill instructs agents to preserve locks.
+- [x] Skill instructs agents to preview calorie rebalances and validate day/week fit.
 - [x] Skill discourages pantry, grocery, and medical-diet expansion.
 
 ## 15. End-To-End Verification Scenario
