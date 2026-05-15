@@ -101,6 +101,7 @@ Acceptance:
 - Nutrition source tables have idempotent `(food_id, source_id)` records and can be populated through `npm --workspace @menumaker/db run nutrition:import -- ./foods.json`.
 - Open Food Facts barcode products can be fetched and imported with `npm --workspace @menumaker/db run nutrition:import:off -- <barcode>`.
 - USDA FoodData Central downloadable JSON datasets can be imported without an API key with `npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json`.
+- Perfil includes local source controls for Open Food Facts barcode import, USDA downloaded JSON import, and user-defined per-100g foods, all backed by the shared app action registry.
 - App scoring reads the source-backed nutrition catalog from Postgres; seed foods remain the fallback baseline when no source records exist.
 
 ## Phase 2: Core Domain And Macro Policy

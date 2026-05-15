@@ -93,6 +93,7 @@ test('user nutrition foods are source-backed and exposed through actions and MCP
   const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
   const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
   const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
 
   assert.match(appService, /export async function createUserNutritionFood/)
   assert.match(appService, /importNutritionSourceRecords\(\[record\]\)/)
@@ -101,4 +102,8 @@ test('user nutrition foods are source-backed and exposed through actions and MCP
   assert.match(appActions, /auditLabel: 'mutation\.create_user_nutrition_food'/)
   assert.match(mcp, /'create_user_nutrition_food'/)
   assert.match(apiRoute, /createUserNutritionFood: 'createUserNutritionFood'/)
+  assert.match(webPage, /function NutritionSourcesPanel/)
+  assert.match(webPage, /action: 'createUserNutritionFood'/)
+  assert.match(webPage, /action: 'importUsdaFoodDataCentralDownload'/)
+  assert.match(webPage, /action: 'importOpenFoodFactsProduct'/)
 })

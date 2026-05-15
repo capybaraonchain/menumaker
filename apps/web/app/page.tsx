@@ -97,7 +97,7 @@ type RuntimeSettings = {
     weekSkeletonFallback: string
   }
 }
-type MappableFood = { id: string; name: string; category: string; aliases: string[] }
+type MappableFood = { id: string; name: string; category: string; aliases: string[]; sources?: string[] }
 type GenerationJob = {
   id: string
   profileId: string | null
@@ -1135,6 +1135,7 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
         <p><strong>No me gusta:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
         <p><strong>Prohibidos:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
       </div>
+      <NutritionSourcesPanel profile={profile} foods={state.mappableFoods} onAction={onAction} />
       <section className="settings-panel">
         <div>
           <h3>Generación local</h3>
@@ -1222,6 +1223,143 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
           <Trash2 /> {resetBusy ? 'Borrando...' : 'Borrar todo local'}
         </button>
       </section>
+    </section>
+  )
+}
+
+function NutritionSourcesPanel({
+  profile,
+  foods,
+  onAction,
+}: {
+  profile: Profile
+  foods: MappableFood[]
+  onAction: (payload: any) => Promise<any>
+}) {
+  const [barcode, setBarcode] = useState('')
+  const [usdaPath, setUsdaPath] = useState('')
+  const [usdaFdcIds, setUsdaFdcIds] = useState('')
+  const [usdaLimit, setUsdaLimit] = useState('')
+  const [customName, setCustomName] = useState('')
+  const [customCategory, setCustomCategory] = useState('custom')
+  const [customAliases, setCustomAliases] = useState('')
+  const [customCalories, setCustomCalories] = useState('')
+  const [customProtein, setCustomProtein] = useState('')
+  const [customCarbs, setCustomCarbs] = useState('')
+  const [customFat, setCustomFat] = useState('')
+  const [customFiber, setCustomFiber] = useState('')
+  const [sourceBusy, setSourceBusy] = useState<string | null>(null)
+  const [sourceMessage, setSourceMessage] = useState<string | null>(null)
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const sourceCounts = foods.reduce<Record<string, number>>((counts, food) => {
+    for (const source of food.sources ?? []) counts[source] = (counts[source] ?? 0) + 1
+    return counts
+  }, {})
+
+  async function runSourceAction(kind: string, payload: Record<string, unknown>, success: string) {
+    setSourceBusy(kind)
+    setSourceMessage(null)
+    setSourceError(null)
+    try {
+      await onAction({ profileId: profile.id, ...payload })
+      setSourceMessage(success)
+      if (kind === 'off') setBarcode('')
+      if (kind === 'usda') {
+        setUsdaPath('')
+        setUsdaFdcIds('')
+        setUsdaLimit('')
+      }
+      if (kind === 'custom') {
+        setCustomName('')
+        setCustomAliases('')
+        setCustomCalories('')
+        setCustomProtein('')
+        setCustomCarbs('')
+        setCustomFat('')
+        setCustomFiber('')
+      }
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : 'No se pudo guardar la fuente nutricional.')
+    } finally {
+      setSourceBusy(null)
+    }
+  }
+
+  function createCustomFood() {
+    const calories = Number(customCalories)
+    const proteinG = Number(customProtein)
+    const carbsG = Number(customCarbs)
+    const fatG = Number(customFat)
+    const fiberG = customFiber.trim() ? Number(customFiber) : undefined
+    if (!customName.trim() || [calories, proteinG, carbsG, fatG].some((value) => !Number.isFinite(value) || value < 0) || (fiberG !== undefined && (!Number.isFinite(fiberG) || fiberG < 0))) {
+      setSourceError('Completa nombre y macros por 100g con números válidos.')
+      return
+    }
+    void runSourceAction('custom', {
+      action: 'createUserNutritionFood',
+      canonicalName: customName.trim(),
+      category: customCategory.trim() || 'custom',
+      aliases: splitList(customAliases),
+      per100g: { calories, proteinG, carbsG, fatG, fiberG },
+      householdUnits: [],
+    }, `Creé ${customName.trim()} como alimento determinístico local.`)
+  }
+
+  return (
+    <section className="settings-panel nutrition-source-panel">
+      <div>
+        <h3>Fuentes nutricionales</h3>
+        <p>{foods.length} alimentos determinísticos disponibles. {sourceSummary(sourceCounts)}</p>
+      </div>
+      <details>
+        <summary>Importar producto por código de barras</summary>
+        <div className="source-form">
+          <label>Código Open Food Facts<input value={barcode} inputMode="numeric" placeholder="3017620422003" onChange={(event) => setBarcode(event.target.value)} /></label>
+          <button className="secondary" disabled={sourceBusy !== null || !/^\d{6,14}$/.test(barcode)} onClick={() => runSourceAction('off', { action: 'importOpenFoodFactsProduct', barcode }, 'Producto importado desde Open Food Facts.')}>
+            <Save size={16} /> {sourceBusy === 'off' ? 'Importando...' : 'Importar producto'}
+          </button>
+        </div>
+      </details>
+      <details>
+        <summary>Importar USDA FoodData Central descargado</summary>
+        <div className="source-form">
+          <label>Ruta JSON local<input value={usdaPath} placeholder="/Users/.../FoodData_Central_foundation_food_json_2026-04-30.json" onChange={(event) => setUsdaPath(event.target.value)} /></label>
+          <div className="source-grid">
+            <label>FDC IDs opcionales<input value={usdaFdcIds} placeholder="321358, 170379" onChange={(event) => setUsdaFdcIds(event.target.value)} /></label>
+            <label>Límite opcional<input value={usdaLimit} inputMode="numeric" placeholder="1000" onChange={(event) => setUsdaLimit(event.target.value)} /></label>
+          </div>
+          <button className="secondary" disabled={sourceBusy !== null || !usdaPath.trim()} onClick={() => runSourceAction('usda', {
+            action: 'importUsdaFoodDataCentralDownload',
+            path: usdaPath.trim(),
+            fdcIds: parsePositiveIntegers(usdaFdcIds),
+            limit: usdaLimit.trim() ? Number(usdaLimit) : undefined,
+          }, 'Dataset USDA importado en las tablas fuente.')}>
+            <Save size={16} /> {sourceBusy === 'usda' ? 'Importando...' : 'Importar USDA'}
+          </button>
+        </div>
+      </details>
+      <details>
+        <summary>Crear alimento local por 100g</summary>
+        <div className="source-form">
+          <label>Nombre<input value={customName} placeholder="queso fresco batido" onChange={(event) => setCustomName(event.target.value)} /></label>
+          <div className="source-grid">
+            <label>Categoría<input value={customCategory} onChange={(event) => setCustomCategory(event.target.value)} /></label>
+            <label>Alias<input value={customAliases} placeholder="skyr, yogur alto en proteína" onChange={(event) => setCustomAliases(event.target.value)} /></label>
+          </div>
+          <div className="source-grid macros">
+            <label>kcal<input value={customCalories} inputMode="decimal" onChange={(event) => setCustomCalories(event.target.value)} /></label>
+            <label>Proteína<input value={customProtein} inputMode="decimal" onChange={(event) => setCustomProtein(event.target.value)} /></label>
+            <label>Carbos<input value={customCarbs} inputMode="decimal" onChange={(event) => setCustomCarbs(event.target.value)} /></label>
+            <label>Grasa<input value={customFat} inputMode="decimal" onChange={(event) => setCustomFat(event.target.value)} /></label>
+            <label>Fibra<input value={customFiber} inputMode="decimal" onChange={(event) => setCustomFiber(event.target.value)} /></label>
+          </div>
+          <button className="secondary" disabled={sourceBusy !== null || !customName.trim()} onClick={createCustomFood}>
+            <Save size={16} /> {sourceBusy === 'custom' ? 'Guardando...' : 'Crear alimento'}
+          </button>
+        </div>
+      </details>
+      {sourceMessage && <p className="source-message">{sourceMessage}</p>}
+      {sourceError && <p className="form-error">{sourceError}</p>}
     </section>
   )
 }
@@ -1322,6 +1460,19 @@ function chatActionSuccessText(action: ChatAction): string {
 
 function splitList(value: string): string[] {
   return value.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function parsePositiveIntegers(value: string): number[] {
+  return splitList(value)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item > 0)
+    .map((item) => Math.trunc(item))
+}
+
+function sourceSummary(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))
+  if (entries.length === 0) return 'Aún no hay fuentes importadas.'
+  return entries.map(([source, count]) => `${source}: ${count}`).join(' · ')
 }
 
 function formatDate(value: string): string {
