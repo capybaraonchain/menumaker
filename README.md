@@ -13,6 +13,16 @@ npm run dev:web -- --hostname 0.0.0.0 --port 3000
 
 Open the printed LAN URL from a phone on the same network.
 
+## Live/Fallback Controls
+
+Recipe generation is LLM-first. Deterministic recipe templates are only a local fallback when the provider is unavailable or too few generated candidates validate.
+
+```bash
+ALLOW_RECIPE_TEMPLATE_FALLBACK=false
+```
+
+Set this to `false` when testing live behavior: generation fails loudly instead of silently filling missing candidates with templates. The app records recipe source, fallback slots, and AI-cache hits in menu generation metadata.
+
 ## Workspaces
 
 - `apps/web`: Next.js mobile web app
@@ -27,4 +37,6 @@ Open the printed LAN URL from a phone on the same network.
 
 ```bash
 npm run typecheck
+npm test
+npm run build
 ```

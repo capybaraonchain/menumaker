@@ -146,6 +146,36 @@ p {
   font-size: 0.86rem;
 }
 
+.generation-notice {
+  border: 1px solid rgba(39, 125, 99, 0.24);
+  background: #edf7f1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 2px;
+  color: #1f5f49;
+}
+
+.generation-notice.warning {
+  border-color: rgba(185, 103, 25, 0.28);
+  background: #fff1dd;
+  color: #7a4719;
+}
+
+.generation-notice.legacy {
+  border-color: rgba(99, 93, 83, 0.24);
+  background: #f4efe6;
+  color: var(--muted);
+}
+
+.generation-notice strong {
+  font-size: 0.86rem;
+}
+
+.generation-notice span {
+  font-size: 0.82rem;
+}
+
 .day-list,
 .meal-list,
 .simple-list,

@@ -122,6 +122,9 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Recipe candidate generation exists.
 - [x] Recipe candidate generation is LLM-first when the local Codex provider is configured.
 - [x] Deterministic recipe templates are explicit fallback only and still pass validation/scoring.
+- [x] Template fallback can be disabled with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false`.
+- [x] Menu state surfaces fallback slots and recipe-source metadata.
+- [x] Successful structured recipe generations are cached in `ai_cache`.
 - [x] Ingredient matching runs before finalization.
 - [x] Deterministic menu scoring exists.
 - [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.

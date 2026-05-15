@@ -54,6 +54,8 @@ Application code should not call provider-specific HTTP endpoints directly outsi
 
 Recipe creation, weekly generation, regeneration, meal editing, and calorie-adjustment replacement candidates should prefer these provider-backed task functions. A deterministic template set may exist for local fallback, but it must be explicit, validated by the same deterministic pipeline, and not become the normal product path.
 
+Local live testing may set `ALLOW_RECIPE_TEMPLATE_FALLBACK=false` to disable template fallback. In that mode the app should surface provider or validation failures instead of pretending a live-generated recipe exists.
+
 ## Token Handling
 
 Tokens must stay server-side.

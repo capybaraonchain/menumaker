@@ -43,6 +43,7 @@ type Recipe = {
   flavorProfile: string
   tags: string[]
   steps: string[]
+  source: string
   nutrition: Nutrition
   ingredients: Ingredient[]
 }
@@ -73,6 +74,7 @@ type AppState = {
     id: string
     profileId: string
     weekStart: string
+    generationSettings?: Record<string, any>
     nutrition: Nutrition
     target: any
     days: Day[]
@@ -484,6 +486,7 @@ function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state
         <span>Proteína mín. {menu.target.proteinG}g</span>
         <span>Confianza {menu.target.confidence}</span>
       </section>
+      <GenerationNotice menu={menu} />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -514,6 +517,37 @@ function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state
         ))}
       </div>
     </div>
+  )
+}
+
+function GenerationNotice({ menu }: { menu: NonNullable<AppState['currentMenu']> }) {
+  const settings = menu.generationSettings ?? {}
+  const fallbackSlots = Array.isArray(settings.fallbackSlots) ? settings.fallbackSlots : []
+  const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { slots?: Record<string, any> } : null
+  const slotTraces = Object.values(trace?.slots ?? {})
+  const cacheHits = slotTraces.filter((item) => item?.cacheHit).length
+  const source = String(settings.recipeSource ?? '')
+  if (fallbackSlots.length > 0) {
+    return (
+      <section className="generation-notice warning">
+        <strong>Fallback usado</strong>
+        <span>Se usaron plantillas determinísticas en {fallbackSlots.map((slot) => slotLabels[String(slot)] ?? String(slot)).join(', ')}.</span>
+      </section>
+    )
+  }
+  if (source === 'llm' || cacheHits > 0) {
+    return (
+      <section className="generation-notice">
+        <strong>Recetas LLM validadas</strong>
+        <span>{cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Nutrición calculada con datos determinísticos.'}</span>
+      </section>
+    )
+  }
+  return (
+    <section className="generation-notice legacy">
+      <strong>Sin trazabilidad de generación</strong>
+      <span>Este menú fue creado antes de registrar fuente, fallback y caché.</span>
+    </section>
   )
 }
 

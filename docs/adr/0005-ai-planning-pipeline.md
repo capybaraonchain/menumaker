@@ -101,6 +101,8 @@ Recipe generation must respect:
 
 The primary recipe source is the LLM recipe-candidate generator. Deterministic recipe templates are allowed only as an explicit local fallback when the provider is unavailable, the provider call fails, or too few generated candidates pass validation.
 
+The fallback must be controllable with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false`. In that live-test mode, generation should fail loudly instead of silently filling missing candidates from templates.
+
 This applies to:
 
 - First weekly menu generation.
@@ -110,6 +112,8 @@ This applies to:
 - Calorie-adjustment recipe replacements from ADR 0009.
 
 Fallback templates must still pass the same deterministic checks as generated recipes: banned or avoided ingredients, preparation time, ingredient matching, nutrition confidence, day/week macro impact, and repetition scoring. The app should record whether a menu or recipe came from LLM generation, fallback templates, or a mixed pool.
+
+Successful structured recipe candidate generations should be cached by input hash, model, and schema version. Cached outputs are still validated and scored before use.
 
 ## Ingredient Normalization And Nutrition
 

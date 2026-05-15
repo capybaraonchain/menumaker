@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto'
 import {
+  codexStatus,
   generateRecipeCandidates,
+  type RecipeGenerationInput,
   type RecipeGenerationResult,
 } from '@menumaker/ai'
 import {
@@ -26,7 +29,7 @@ import {
   type CaloriePlannerMenu,
 } from './caloriePlanner'
 import { closeDb, sqlClient } from './client'
-import { localUserId } from './env'
+import { loadDotEnv, localUserId } from './env'
 
 export interface AppState {
   provider?: unknown
@@ -63,6 +66,7 @@ export interface WeeklyMenuView {
   weekStart: string
   locale: 'es' | 'en'
   status: string
+  generationSettings: Record<string, unknown>
   nutrition: NutritionTotals
   target: MacroTargets
   days: DayPlanView[]
@@ -94,6 +98,7 @@ export interface RecipeView {
   flavorProfile: string
   tags: string[]
   steps: string[]
+  source: string
   nutrition: NutritionTotals
   ingredients: IngredientView[]
   saved?: boolean
@@ -181,7 +186,25 @@ interface RecipePoolResult {
   recipes: GeneratedScoredRecipe[]
   source: 'llm' | 'template' | 'mixed'
   llmResult: RecipeGenerationResult
+  trace: RecipePoolTrace
 }
+
+interface RecipePoolTrace {
+  requestedCount: number
+  providerConfigured: boolean
+  providerSource: RecipeGenerationResult['source']
+  cacheHit: boolean
+  llmRawCandidateCount: number
+  acceptedLlmCandidateCount: number
+  fallbackAllowed: boolean
+  fallbackUsed: boolean
+  fallbackReason: 'none' | 'provider_unavailable' | 'provider_failed' | 'too_few_valid_candidates'
+  fallbackCandidateCount: number
+  returnedCandidateCount: number
+  error?: string
+}
+
+const RECIPE_GENERATION_SCHEMA_VERSION = 'menumaker_recipe_candidates:v1'
 
 const replacementSlotShares: Record<MealSlot, number> = {
   breakfast: 0.23,
@@ -355,14 +378,36 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
     returning id
   `
 
+  let weekRecipes: Awaited<ReturnType<typeof buildRecipesForWeek>>
+  try {
+    weekRecipes = await buildRecipesForWeek(profile, target)
+  } catch (error) {
+    if (job) {
+      await sql`
+        update generation_jobs set status = 'failed',
+          failure_code = 'generation_exhausted',
+          logs = ${sql.json(['Construyendo semana', 'Generando candidatos con LLM', 'Fallo de generación'] as any)},
+          error = ${error instanceof Error ? error.message : String(error)},
+          updated_at = now()
+        where id = ${job.id}
+      `
+    }
+    throw error
+  }
+
   const [menu] = await sql<[{ id: string }]>`
     insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
-    values (${localUserId()}, ${profileId}, ${macroTargetId}, ${currentWeekStart()}, ${profile.locale}, 'completed', ${sql.json({ kind } as any)}, '{}')
+    values (${localUserId()}, ${profileId}, ${macroTargetId}, ${currentWeekStart()}, ${profile.locale}, 'completed', ${sql.json({
+      kind,
+      recipeSource: weekRecipes.source,
+      fallbackSlots: weekRecipes.fallbackSlots,
+      fallbackAllowed: weekRecipes.trace.fallbackAllowed,
+      trace: weekRecipes.trace,
+    } as any)}, '{}')
     returning id
   `
   if (!menu) throw new Error('No se pudo crear el menú.')
 
-  const weekRecipes = await buildRecipesForWeek(profile, target)
   const dayNutrition: NutritionTotals[] = []
   for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
     const [day] = await sql<[{ id: string }]>`
@@ -384,14 +429,6 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
 
   const weeklyNutrition = sumNutrition(dayNutrition)
   await sql`update weekly_menus set nutrition_snapshot = ${sql.json(weeklyNutrition as any)} where id = ${menu.id}`
-  await sql`
-    update weekly_menus set generation_settings = ${sql.json({
-      kind,
-      recipeSource: weekRecipes.source,
-      fallbackSlots: weekRecipes.fallbackSlots,
-    } as any)}
-    where id = ${menu.id}
-  `
   if (job) {
     await sql`
       update generation_jobs set status = 'completed', weekly_menu_id = ${menu.id},
@@ -401,7 +438,12 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
           'Calculando nutrición',
           'Finalizando',
         ] as any)},
-        result = ${sql.json({ menuId: menu.id } as any)}, updated_at = now()
+        result = ${sql.json({
+          menuId: menu.id,
+          recipeSource: weekRecipes.source,
+          fallbackSlots: weekRecipes.fallbackSlots,
+          trace: weekRecipes.trace,
+        } as any)}, updated_at = now()
       where id = ${job.id}
     `
   }
@@ -463,6 +505,7 @@ export async function getWeeklyMenu(menuId: string): Promise<WeeklyMenuView> {
     weekStart: menu.week_start,
     locale: menu.locale,
     status: menu.status,
+    generationSettings: menu.generation_settings ?? {},
     nutrition: menu.nutrition_snapshot,
     target: targetFromRow(menu),
     days,
@@ -830,6 +873,10 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>
   source: 'llm' | 'template' | 'mixed'
   fallbackSlots: MealSlot[]
+  trace: {
+    fallbackAllowed: boolean
+    slots: Record<MealSlot, RecipePoolTrace>
+  }
 }> {
   const pools = new Map<MealSlot, RecipePoolResult>()
   for (const slot of mealSlots) {
@@ -870,10 +917,15 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
   }
 
   const fallbackSlots = mealSlots.filter((slot) => pools.get(slot)?.source !== 'llm')
+  const slotTraces = Object.fromEntries(mealSlots.map((slot) => [slot, pools.get(slot)!.trace])) as Record<MealSlot, RecipePoolTrace>
   return {
     days,
     source: fallbackSlots.length === 0 ? 'llm' : fallbackSlots.length === mealSlots.length ? 'template' : 'mixed',
     fallbackSlots,
+    trace: {
+      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      slots: slotTraces,
+    },
   }
 }
 
@@ -888,7 +940,7 @@ async function recipePoolForSlot(input: {
   menuContext?: unknown
 }): Promise<RecipePoolResult> {
   const avoidFoods = unique([...input.profile.bannedFoods, ...input.profile.dislikes, ...input.avoidFoods])
-  const llmResult = await generateRecipeCandidates({
+  const generationInput: RecipeGenerationInput = {
     locale: input.profile.locale,
     slot: input.slot,
     count: input.count,
@@ -902,7 +954,8 @@ async function recipePoolForSlot(input: {
     targetNutrition: input.targetNutrition,
     menuContext: input.menuContext,
     allowedIngredients: seedFoods.flatMap((food) => food.aliases.slice(0, 2)),
-  })
+  }
+  const llmResult = await generateRecipeCandidatesCached(generationInput)
   const llmRecipes = scoreGeneratedCandidates({
     candidates: llmResult.recipes,
     avoidedFoods: avoidFoods,
@@ -912,7 +965,31 @@ async function recipePoolForSlot(input: {
     limit: input.count,
   })
   if (llmRecipes.length >= Math.min(input.count, 3)) {
-    return { recipes: llmRecipes, source: 'llm', llmResult }
+    return {
+      recipes: llmRecipes,
+      source: 'llm',
+      llmResult,
+      trace: {
+        requestedCount: input.count,
+        providerConfigured: llmResult.providerConfigured,
+        providerSource: llmResult.source,
+        cacheHit: Boolean(llmResult.cacheHit),
+        llmRawCandidateCount: llmResult.recipes.length,
+        acceptedLlmCandidateCount: llmRecipes.length,
+        fallbackAllowed: recipeTemplateFallbackAllowed(),
+        fallbackUsed: false,
+        fallbackReason: 'none',
+        fallbackCandidateCount: 0,
+        returnedCandidateCount: llmRecipes.length,
+        error: llmResult.error,
+      },
+    }
+  }
+
+  const fallbackAllowed = recipeTemplateFallbackAllowed()
+  const fallbackReason = recipeFallbackReason(llmResult, llmRecipes.length)
+  if (!fallbackAllowed) {
+    throw new Error(`No hay suficientes recetas LLM válidas para ${slotLabel(input.slot)} (${llmRecipes.length}/${Math.min(input.count, 3)}). El fallback determinístico está desactivado por ALLOW_RECIPE_TEMPLATE_FALLBACK=false.`)
   }
 
   const templateRecipes = scoreGeneratedCandidates({
@@ -928,11 +1005,81 @@ async function recipePoolForSlot(input: {
     ...llmRecipes,
     ...templateRecipes.filter((item) => !seen.has(normalizeIngredientName(item.recipe.title))),
   ].slice(0, input.count)
+  const source = templateRecipes.length === 0 && llmRecipes.length > 0
+    ? 'llm'
+    : llmRecipes.length > 0
+      ? 'mixed'
+      : 'template'
   return {
     recipes: merged,
-    source: llmRecipes.length > 0 ? 'mixed' : 'template',
+    source,
     llmResult,
+    trace: {
+      requestedCount: input.count,
+      providerConfigured: llmResult.providerConfigured,
+      providerSource: llmResult.source,
+      cacheHit: Boolean(llmResult.cacheHit),
+      llmRawCandidateCount: llmResult.recipes.length,
+      acceptedLlmCandidateCount: llmRecipes.length,
+      fallbackAllowed,
+      fallbackUsed: templateRecipes.length > 0,
+      fallbackReason,
+      fallbackCandidateCount: templateRecipes.length,
+      returnedCandidateCount: merged.length,
+      error: llmResult.error,
+    },
   }
+}
+
+async function generateRecipeCandidatesCached(input: RecipeGenerationInput): Promise<RecipeGenerationResult> {
+  const status = codexStatus()
+  const inputHash = hashStableJson({
+    schemaVersion: RECIPE_GENERATION_SCHEMA_VERSION,
+    model: status.model,
+    reasoningEffort: status.reasoningEffort,
+    input,
+  })
+  const sql = sqlClient()
+  const [cached] = await sql<[{ output: RecipeGenerationResult }]>`
+    select output from ai_cache
+    where input_hash = ${inputHash}
+      and model = ${status.model}
+      and schema_version = ${RECIPE_GENERATION_SCHEMA_VERSION}
+    order by created_at desc
+    limit 1
+  `
+  if (cached?.output) return { ...cached.output, cacheHit: true }
+
+  const result = await generateRecipeCandidates(input)
+  if (result.source === 'llm' && result.recipes.length > 0) {
+    await sql`
+      insert into ai_cache (input_hash, model, schema_version, output)
+      values (${inputHash}, ${status.model}, ${RECIPE_GENERATION_SCHEMA_VERSION}, ${sql.json({ ...result, cacheHit: false } as any)})
+    `
+  }
+  return { ...result, cacheHit: false }
+}
+
+function recipeTemplateFallbackAllowed(): boolean {
+  loadDotEnv()
+  return String(process.env.ALLOW_RECIPE_TEMPLATE_FALLBACK ?? 'true').toLowerCase() !== 'false'
+}
+
+function recipeFallbackReason(result: RecipeGenerationResult, acceptedCount: number): RecipePoolTrace['fallbackReason'] {
+  if (result.source === 'unavailable') return 'provider_unavailable'
+  if (result.source === 'failed') return 'provider_failed'
+  return 'too_few_valid_candidates'
+}
+
+function hashStableJson(value: unknown): string {
+  return createHash('sha256').update(stableJson(value)).digest('hex')
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const object = value as Record<string, unknown>
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`
 }
 
 function scoreGeneratedCandidates(input: {
@@ -1139,6 +1286,7 @@ async function recipeFromRow(row: any): Promise<RecipeView> {
     flavorProfile: row.flavor_profile,
     tags: row.tags ?? [],
     steps: row.steps ?? [],
+    source: row.source,
     nutrition: row.nutrition_snapshot,
     ingredients: ingredientRows.map((ingredient) => ({
       id: ingredient.id,

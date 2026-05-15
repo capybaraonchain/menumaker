@@ -206,6 +206,8 @@ Implement:
 - Failure states.
 - AI cache keyed by input hash, model, and schema version.
 - LLM-first recipe candidate generation with deterministic templates only as an explicit fallback.
+- `ALLOW_RECIPE_TEMPLATE_FALLBACK=false` live mode for failing loudly instead of silently using templates.
+- AI cache reads/writes for successful structured recipe candidate generations.
 
 Acceptance:
 
@@ -213,6 +215,7 @@ Acceptance:
 - Failures are represented with explicit codes.
 - Structured outputs are validated before use.
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
+- Menu generation metadata records recipe source, fallback slots, fallback policy, and AI-cache hits.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

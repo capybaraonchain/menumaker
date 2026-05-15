@@ -21,6 +21,7 @@ export interface RecipeGenerationResult {
   providerConfigured: boolean
   source: 'llm' | 'unavailable' | 'failed'
   recipes: RecipeCandidate[]
+  cacheHit?: boolean
   error?: string
 }
 
