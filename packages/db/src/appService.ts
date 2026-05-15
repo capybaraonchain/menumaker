@@ -3,6 +3,9 @@ import {
   codexStatus,
   generateRecipeCandidates,
   generateWeekSkeleton,
+  chatWithMenuContext,
+  planChatCommand,
+  type PlannedChatCommand,
   type RecipeGenerationInput,
   type RecipeGenerationResult,
   type WeekSkeletonGenerationInput,
@@ -158,6 +161,30 @@ export interface RetryGenerationJobResult {
   newJobId: string
   retryOfKind: string
   menu: WeeklyMenuView
+}
+
+export interface ChatCommandPlanningInput {
+  message: string
+  locale: Locale
+  profileId?: string
+  menuContext?: unknown
+}
+
+export interface CachedPlannedChatCommand extends PlannedChatCommand {
+  cacheHit: boolean
+}
+
+export interface MenuChatInput {
+  message: string
+  locale: Locale
+  profileName?: string
+  menuContext?: unknown
+}
+
+export interface CachedMenuChatResponse {
+  text: string
+  providerConfigured: boolean
+  cacheHit: boolean
 }
 
 interface WeeklyMenuGenerationJobInput {
@@ -359,6 +386,8 @@ interface WeekRepairTrace {
 
 const RECIPE_GENERATION_SCHEMA_VERSION = 'menumaker_recipe_candidates:v1'
 const WEEK_SKELETON_SCHEMA_VERSION = 'menumaker_week_skeleton:v1'
+const CHAT_COMMAND_SCHEMA_VERSION = 'menumaker_chat_command:v1'
+const MENU_CHAT_SCHEMA_VERSION = 'menumaker_menu_chat:v1'
 
 const replacementSlotShares: Record<MealSlot, number> = {
   breakfast: 0.23,
@@ -482,6 +511,38 @@ export async function updateProfile(profileId: string, input: ProfileUpdateInput
   `
   await saveMacroTarget(profileId, targets)
   return getAppState(profileId)
+}
+
+export async function planChatCommandCached(input: ChatCommandPlanningInput): Promise<CachedPlannedChatCommand | null> {
+  const status = codexStatus()
+  if (!status.configured) return null
+  const cacheInput = {
+    ...input,
+    menuContext: compactMenuForPlannerCache(input.menuContext),
+  }
+  const cached = await readAiCache<PlannedChatCommand>(CHAT_COMMAND_SCHEMA_VERSION, cacheInput)
+  if (cached) return { ...cached, cacheHit: true }
+  const result = await planChatCommand(input)
+  if (!result) return null
+  await writeAiCache(CHAT_COMMAND_SCHEMA_VERSION, cacheInput, result)
+  return { ...result, cacheHit: false }
+}
+
+export async function chatWithMenuContextCached(input: MenuChatInput): Promise<CachedMenuChatResponse> {
+  const status = codexStatus()
+  if (!status.configured) {
+    const response = await chatWithMenuContext(input)
+    return { ...response, cacheHit: false }
+  }
+  const cacheInput = {
+    ...input,
+    menuContext: compactMenuForChatCache(input.menuContext),
+  }
+  const cached = await readAiCache<{ text: string; providerConfigured: boolean }>(MENU_CHAT_SCHEMA_VERSION, cacheInput)
+  if (cached) return { ...cached, cacheHit: true }
+  const result = await chatWithMenuContext(input)
+  if (result.providerConfigured) await writeAiCache(MENU_CHAT_SCHEMA_VERSION, cacheInput, result)
+  return { ...result, cacheHit: false }
 }
 
 export async function exportProfileData(profileId: string): Promise<ProfileDeletionExport> {
@@ -1765,30 +1826,11 @@ async function buildWeekSkeleton(profile: ProfileRow, targets: MacroTargets): Pr
 }
 
 async function generateWeekSkeletonCached(input: WeekSkeletonGenerationInput): Promise<WeekSkeletonGenerationResult> {
-  const status = codexStatus()
-  const inputHash = hashStableJson({
-    schemaVersion: WEEK_SKELETON_SCHEMA_VERSION,
-    model: status.model,
-    reasoningEffort: status.reasoningEffort,
-    input,
-  })
-  const sql = sqlClient()
-  const [cached] = await sql<[{ output: WeekSkeletonGenerationResult }]>`
-    select output from ai_cache
-    where input_hash = ${inputHash}
-      and model = ${status.model}
-      and schema_version = ${WEEK_SKELETON_SCHEMA_VERSION}
-    order by created_at desc
-    limit 1
-  `
-  if (cached?.output) return { ...cached.output, cacheHit: true }
-
+  const cached = await readAiCache<WeekSkeletonGenerationResult>(WEEK_SKELETON_SCHEMA_VERSION, input)
+  if (cached) return { ...cached, cacheHit: true }
   const result = await generateWeekSkeleton(input)
   if (result.source === 'llm' && result.skeleton) {
-    await sql`
-      insert into ai_cache (input_hash, model, schema_version, output)
-      values (${inputHash}, ${status.model}, ${WEEK_SKELETON_SCHEMA_VERSION}, ${sql.json({ ...result, cacheHit: false } as any)})
-    `
+    await writeAiCache(WEEK_SKELETON_SCHEMA_VERSION, input, { ...result, cacheHit: false })
   }
   return { ...result, cacheHit: false }
 }
@@ -1964,32 +2006,47 @@ async function recipePoolForSlot(input: {
 }
 
 async function generateRecipeCandidatesCached(input: RecipeGenerationInput): Promise<RecipeGenerationResult> {
+  const cached = await readAiCache<RecipeGenerationResult>(RECIPE_GENERATION_SCHEMA_VERSION, input)
+  if (cached) return { ...cached, cacheHit: true }
+  const result = await generateRecipeCandidates(input)
+  if (result.source === 'llm' && result.recipes.length > 0) {
+    await writeAiCache(RECIPE_GENERATION_SCHEMA_VERSION, input, { ...result, cacheHit: false })
+  }
+  return { ...result, cacheHit: false }
+}
+
+async function readAiCache<T>(schemaVersion: string, input: unknown): Promise<T | null> {
   const status = codexStatus()
-  const inputHash = hashStableJson({
-    schemaVersion: RECIPE_GENERATION_SCHEMA_VERSION,
-    model: status.model,
-    reasoningEffort: status.reasoningEffort,
-    input,
-  })
+  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, status.reasoningEffort)
   const sql = sqlClient()
-  const [cached] = await sql<[{ output: RecipeGenerationResult }]>`
+  const [cached] = await sql<[{ output: T }]>`
     select output from ai_cache
     where input_hash = ${inputHash}
       and model = ${status.model}
-      and schema_version = ${RECIPE_GENERATION_SCHEMA_VERSION}
+      and schema_version = ${schemaVersion}
     order by created_at desc
     limit 1
   `
-  if (cached?.output) return { ...cached.output, cacheHit: true }
+  return cached?.output ?? null
+}
 
-  const result = await generateRecipeCandidates(input)
-  if (result.source === 'llm' && result.recipes.length > 0) {
-    await sql`
-      insert into ai_cache (input_hash, model, schema_version, output)
-      values (${inputHash}, ${status.model}, ${RECIPE_GENERATION_SCHEMA_VERSION}, ${sql.json({ ...result, cacheHit: false } as any)})
-    `
-  }
-  return { ...result, cacheHit: false }
+async function writeAiCache(schemaVersion: string, input: unknown, output: unknown): Promise<void> {
+  const status = codexStatus()
+  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, status.reasoningEffort)
+  const sql = sqlClient()
+  await sql`
+    insert into ai_cache (input_hash, model, schema_version, output)
+    values (${inputHash}, ${status.model}, ${schemaVersion}, ${sql.json(output as any)})
+  `
+}
+
+function aiCacheInputHash(schemaVersion: string, input: unknown, model: string, reasoningEffort: string): string {
+  return hashStableJson({
+    schemaVersion,
+    model,
+    reasoningEffort,
+    input,
+  })
 }
 
 function recipeTemplateFallbackAllowed(): boolean {
@@ -2343,6 +2400,57 @@ function compactMenuForGeneration(menu: WeeklyMenuView): unknown {
         nutrition: meal.nutrition,
       })),
     })),
+  }
+}
+
+function compactMenuForPlannerCache(menu: unknown): unknown {
+  if (!menu || typeof menu !== 'object') return null
+  const current = menu as Partial<WeeklyMenuView>
+  return {
+    id: current.id,
+    profileId: current.profileId,
+    days: current.days?.map((day) => ({
+      id: day.id,
+      dayIndex: day.dayIndex,
+      locked: day.locked,
+      meals: day.meals.map((meal) => ({
+        id: meal.id,
+        slot: meal.slot,
+        locked: meal.locked,
+        title: meal.recipe.title,
+        ingredients: meal.recipe.ingredients?.map((ingredient) => ingredient.name) ?? [],
+      })),
+    })) ?? [],
+  }
+}
+
+function compactMenuForChatCache(menu: unknown): unknown {
+  if (!menu || typeof menu !== 'object') return null
+  const current = menu as Partial<WeeklyMenuView>
+  return {
+    id: current.id,
+    profileId: current.profileId,
+    weekStart: current.weekStart,
+    target: current.target,
+    nutrition: current.nutrition,
+    generationSettings: current.generationSettings,
+    days: current.days?.map((day) => ({
+      dayIndex: day.dayIndex,
+      locked: day.locked,
+      meals: day.meals.map((meal) => ({
+        id: meal.id,
+        slot: meal.slot,
+        locked: meal.locked,
+        title: meal.recipe.title,
+        ingredients: meal.recipe.ingredients?.map((ingredient) => ({
+          name: ingredient.name,
+          amount: ingredient.amount,
+          unit: ingredient.unit,
+          confidence: ingredient.confidence,
+        })) ?? [],
+        nutrition: meal.nutrition,
+      })),
+    })) ?? [],
   }
 }
 

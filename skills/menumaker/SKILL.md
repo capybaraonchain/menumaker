@@ -77,6 +77,12 @@ For macro questions:
 2. Use nutrition snapshots or `analyze_recipe_nutrition`.
 3. Explain uncertainty if confidence is not deterministic.
 
+For in-app chat behavior:
+
+1. Treat chat planner and menu-context chat results as cacheable AI calls.
+2. Do not rely on cache entries across different menus or profiles unless the context hash matches.
+3. Prefer deterministic app actions over free-text claims whenever the user asks for durable changes.
+
 For generation failures or progress:
 
 1. Call `get_generation_jobs` for the active profile.

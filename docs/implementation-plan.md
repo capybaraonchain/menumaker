@@ -219,6 +219,8 @@ Implement:
 - `ALLOW_WEEK_SKELETON_FALLBACK=false` live mode for failing loudly instead of silently assembling a deterministic skeleton.
 - AI cache reads/writes for successful structured recipe candidate generations.
 - AI cache reads/writes for successful structured week skeleton generations.
+- AI cache reads/writes for chat tool planning.
+- AI cache reads/writes for menu-context chat responses.
 
 Acceptance:
 
@@ -228,6 +230,7 @@ Acceptance:
 - Structured outputs are validated before use.
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
 - Menu generation metadata records recipe source, skeleton source, fallback slots, fallback policy, repair trace, and AI-cache hits.
+- Chat responses can report cache hits without exposing provider tokens.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

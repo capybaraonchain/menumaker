@@ -127,6 +127,8 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Menu state surfaces fallback slots and recipe-source metadata.
 - [x] Successful structured recipe generations are cached in `ai_cache`.
 - [x] Successful structured week skeleton generations are cached in `ai_cache`.
+- [x] Successful chat tool-planner calls are cached in `ai_cache`.
+- [x] Successful menu-context chat responses are cached in `ai_cache`.
 - [x] Ingredient matching runs before finalization.
 - [x] Deterministic ingredient catalog covers the initial templates plus a broader common-food set for LLM-generated recipes.
 - [x] Ambiguous household units use food-specific serving conversions when available and downgrade confidence when falling back to generic estimates.

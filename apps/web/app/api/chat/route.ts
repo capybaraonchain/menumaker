@@ -1,7 +1,8 @@
-import { chatWithMenuContext, planChatCommand } from '@menumaker/ai'
 import {
+  chatWithMenuContextCached,
   createPendingAction,
   getAppState,
+  planChatCommandCached,
   type AppChatResponse,
   type PendingActionView,
   type WeeklyMenuView,
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
       if (plannedResponse) return NextResponse.json(plannedResponse)
     }
 
-    const response = await chatWithMenuContext({
+    const response = await chatWithMenuContextCached({
       message,
       locale: state.activeProfile?.locale ?? 'es',
       profileName: state.activeProfile?.name,
@@ -50,7 +51,7 @@ async function plannedCommandResponse(
   state: Awaited<ReturnType<typeof getAppState>>,
 ): Promise<AppChatResponse | null> {
   if (!state.activeProfile || !state.currentMenu) return null
-  const plan = await planChatCommand({
+  const plan = await planChatCommandCached({
     message,
     locale: state.activeProfile.locale,
     profileId: state.activeProfile.id,
