@@ -124,6 +124,7 @@ type RemediationPlan = {
 }
 type PreferenceRelaxationRequest = { job: GenerationJob; plan: RemediationPlan }
 type IngredientMappingRequest = { job: GenerationJob; plan: RemediationPlan }
+type FallbackPolicyRequest = { job: GenerationJob; plan: RemediationPlan }
 type ReplacementProposal = {
   proposalId: string
   affectedMeals: string[]
@@ -165,6 +166,7 @@ export default function App() {
   const [pendingReplacement, setPendingReplacement] = useState<PendingReplacement | null>(null)
   const [preferenceRelaxation, setPreferenceRelaxation] = useState<PreferenceRelaxationRequest | null>(null)
   const [ingredientMapping, setIngredientMapping] = useState<IngredientMappingRequest | null>(null)
+  const [fallbackPolicyRequest, setFallbackPolicyRequest] = useState<FallbackPolicyRequest | null>(null)
   const [creatingProfile, setCreatingProfile] = useState(false)
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
@@ -269,6 +271,7 @@ export default function App() {
             onAction={postAction}
             onRelaxPreferences={setPreferenceRelaxation}
             onReviewIngredients={setIngredientMapping}
+            onFallbackPolicy={setFallbackPolicyRequest}
           />
         )}
         {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
@@ -392,6 +395,17 @@ export default function App() {
           foods={state.mappableFoods}
           onAction={postAction}
           onClose={() => setIngredientMapping(null)}
+        />
+      )}
+
+      {fallbackPolicyRequest && state.activeProfile && (
+        <FallbackPolicyModal
+          profile={state.activeProfile}
+          job={fallbackPolicyRequest.job}
+          plan={fallbackPolicyRequest.plan}
+          settings={state.runtimeSettings}
+          onAction={postAction}
+          onClose={() => setFallbackPolicyRequest(null)}
         />
       )}
 
@@ -542,6 +556,7 @@ function WeekScreen({
   onAction,
   onRelaxPreferences,
   onReviewIngredients,
+  onFallbackPolicy,
 }: {
   state: AppState
   busy: string | null
@@ -550,12 +565,13 @@ function WeekScreen({
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
+  onFallbackPolicy: (request: FallbackPolicyRequest) => void
 }) {
   const menu = state.currentMenu
   if (!menu) {
     return (
       <div className="week-screen">
-        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} compact={false} />
+        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
         {state.activeProfile?.latestTarget && (
           <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
@@ -581,7 +597,7 @@ function WeekScreen({
         <span>Confianza {menu.target.confidence}</span>
       </section>
       <GenerationNotice menu={menu} profileId={state.activeProfile?.id} onAction={onAction} />
-      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} compact />
+      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} compact />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -741,6 +757,7 @@ function GenerationJobsPanel({
   onAction,
   onRelaxPreferences,
   onReviewIngredients,
+  onFallbackPolicy,
   compact = false,
 }: {
   jobs: GenerationJob[]
@@ -749,6 +766,7 @@ function GenerationJobsPanel({
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
+  onFallbackPolicy: (request: FallbackPolicyRequest) => void
   compact?: boolean
 }) {
   const visibleJobs = jobs
@@ -782,6 +800,7 @@ function GenerationJobsPanel({
                   onAction={onAction}
                   onRelaxPreferences={onRelaxPreferences}
                   onReviewIngredients={onReviewIngredients}
+                  onFallbackPolicy={onFallbackPolicy}
                 />
               )}
             </div>
@@ -810,6 +829,7 @@ function JobRemediation({
   onAction,
   onRelaxPreferences,
   onReviewIngredients,
+  onFallbackPolicy,
 }: {
   job: GenerationJob
   plan: RemediationPlan
@@ -818,6 +838,7 @@ function JobRemediation({
   onAction: (payload: any) => Promise<any>
   onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
   onReviewIngredients: (request: IngredientMappingRequest) => void
+  onFallbackPolicy: (request: FallbackPolicyRequest) => void
 }) {
   const hasPreferencesToRelax = Boolean(profile && (profile.dislikes.length > 0 || profile.bannedFoods.length > 0))
   return (
@@ -855,12 +876,7 @@ function JobRemediation({
             }
             if (action.kind === 'enable_fallback') {
               return (
-                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onAction({
-                  action: 'setFallbackPolicy',
-                  profileId: profile?.id ?? job.profileId ?? undefined,
-                  recipeTemplateFallbackAllowed: true,
-                  weekSkeletonFallbackAllowed: true,
-                })}>
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onFallbackPolicy({ job, plan })}>
                   {action.label}
                 </button>
               )
@@ -1034,6 +1050,81 @@ function IngredientMappingModal({
               <RefreshCw size={16} /> {localBusy === 'retry' ? 'Reintentando...' : 'Guardar y reintentar'}
             </button>
           )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function FallbackPolicyModal({
+  profile,
+  job,
+  plan,
+  settings,
+  onAction,
+  onClose,
+}: {
+  profile: Profile
+  job: GenerationJob
+  plan: RemediationPlan
+  settings: RuntimeSettings
+  onAction: (payload: any) => Promise<any>
+  onClose: () => void
+}) {
+  const [recipeFallback, setRecipeFallback] = useState(true)
+  const [skeletonFallback, setSkeletonFallback] = useState(true)
+  const [retryAfterSave, setRetryAfterSave] = useState(job.status === 'failed')
+  const [error, setError] = useState<string | null>(null)
+  const [localBusy, setLocalBusy] = useState(false)
+
+  async function apply() {
+    setLocalBusy(true)
+    setError(null)
+    try {
+      await onAction({
+        action: 'setFallbackPolicy',
+        profileId: profile.id,
+        recipeTemplateFallbackAllowed: recipeFallback,
+        weekSkeletonFallbackAllowed: skeletonFallback,
+      })
+      if (retryAfterSave && job.status === 'failed') {
+        await onAction({ action: 'retryGenerationJob', profileId: profile.id, jobId: job.id })
+      }
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo actualizar la política de fallback.')
+    } finally {
+      setLocalBusy(false)
+    }
+  }
+
+  return (
+    <Modal title="Habilitar fallback" onClose={onClose}>
+      <div className="remediation-modal">
+        <p>{plan.summary}</p>
+        <p className="muted">Esto cambia la política local de generación. Si lo habilitas, la app puede usar plantillas determinísticas cuando el LLM no entregue suficientes candidatos válidos; esos platos quedarán marcados como fallback en la trazabilidad del menú.</p>
+        <label className="checkline">
+          <input type="checkbox" checked={recipeFallback} onChange={(event) => setRecipeFallback(event.target.checked)} />
+          Fallback de recetas ({settings.recipeTemplateFallbackAllowed ? 'actualmente habilitado' : 'actualmente deshabilitado'})
+        </label>
+        <label className="checkline">
+          <input type="checkbox" checked={skeletonFallback} onChange={(event) => setSkeletonFallback(event.target.checked)} />
+          Fallback de esqueleto semanal ({settings.weekSkeletonFallbackAllowed ? 'actualmente habilitado' : 'actualmente deshabilitado'})
+        </label>
+        {job.status === 'failed' && (
+          <label className="checkline">
+            <input type="checkbox" checked={retryAfterSave} onChange={(event) => setRetryAfterSave(event.target.checked)} />
+            Guardar y reintentar este trabajo
+          </label>
+        )}
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button className="primary" type="button" disabled={localBusy || (!recipeFallback && !skeletonFallback)} onClick={apply}>
+            <Save size={16} /> {localBusy ? 'Aplicando...' : retryAfterSave ? 'Guardar y reintentar' : 'Guardar política'}
+          </button>
+          <button className="secondary" type="button" disabled={localBusy} onClick={onClose}>
+            <X size={16} /> Cancelar
+          </button>
         </div>
       </div>
     </Modal>

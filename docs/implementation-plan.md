@@ -254,6 +254,7 @@ Acceptance:
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
 - Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
 - Low-confidence or ambiguous-ingredient failures can save a mapping and retry the generation without bypassing deterministic nutrition.
+- Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

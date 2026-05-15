@@ -107,3 +107,12 @@ test('user nutrition foods are source-backed and exposed through actions and MCP
   assert.match(webPage, /action: 'importUsdaFoodDataCentralDownload'/)
   assert.match(webPage, /action: 'importOpenFoodFactsProduct'/)
 })
+
+test('failure UI has guided fallback remediation instead of direct fallback mutation', () => {
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
+
+  assert.match(webPage, /function FallbackPolicyModal/)
+  assert.match(webPage, /onFallbackPolicy\(\{ job, plan \}\)/)
+  assert.match(webPage, /Guardar y reintentar este trabajo/)
+  assert.match(webPage, /action: 'setFallbackPolicy'/)
+})
