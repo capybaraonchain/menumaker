@@ -259,6 +259,7 @@ Acceptance:
 - Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
 - `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.
+- Semana offers `Encolar semana` as the enqueue-first generation path and keeps direct `Generar ahora` / queued-job `Ejecutar ahora` controls as explicit local fallback controls.
 
 ## Phase 6: Weekly Menu Planning Pipeline
 

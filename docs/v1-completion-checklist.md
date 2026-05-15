@@ -215,8 +215,10 @@ Local v1 generation can still execute inside requests for direct “run now” a
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
 - [x] Weekly generation can be enqueued without immediate execution.
+- [x] Semana exposes an enqueue-first weekly generation control, with direct execution kept as an explicit fallback.
 - [x] Weekly generation has a reusable runner that executes a queued job.
 - [x] Local worker command can process queued weekly generation and preview jobs outside the web request.
+- [x] Queued jobs can still be manually executed from the UI when the local worker is not running.
 - [x] MCP exposes enqueue and run tools for weekly generation jobs.
 - [x] Regeneration and calorie preview plans can be queued and executed through shared app actions.
 - [x] MCP exposes enqueue and run tools for preview generation jobs.

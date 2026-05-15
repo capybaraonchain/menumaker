@@ -599,9 +599,14 @@ function WeekScreen({
         <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} onAdjustTargets={onAdjustTargets} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
         {state.activeProfile?.latestTarget && (
-          <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
-            <Sparkles /> Generar semana
-          </button>
+          <div className="action-row">
+            <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: false })}>
+              <Sparkles /> Encolar semana
+            </button>
+            <button className="secondary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
+              <RefreshCw /> Generar ahora
+            </button>
+          </div>
         )}
       </div>
     )
@@ -838,9 +843,16 @@ function GenerationJobsPanel({
               </button>
             )}
             {(job.status === 'queued' || job.status === 'running') && (
-              <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'cancelGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
-                <X /> Cancelar
-              </button>
+              <div className="job-actions">
+                {job.status === 'queued' && (
+                  <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'runGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
+                    <RefreshCw /> Ejecutar ahora
+                  </button>
+                )}
+                <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'cancelGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
+                  <X /> Cancelar
+                </button>
+              </div>
             )}
           </article>
         ))}

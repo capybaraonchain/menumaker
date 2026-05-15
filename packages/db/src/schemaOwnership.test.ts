@@ -158,6 +158,7 @@ test('ingredient remediation searches source-backed nutrition foods through shar
 test('queued generation jobs have a local worker entrypoint', () => {
   const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
   const worker = readFileSync(resolve(root, 'packages/db/src/generationWorker.ts'), 'utf8')
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
   const dbPackage = readFileSync(resolve(root, 'packages/db/package.json'), 'utf8')
   const rootPackage = readFileSync(resolve(root, 'package.json'), 'utf8')
 
@@ -165,6 +166,9 @@ test('queued generation jobs have a local worker entrypoint', () => {
   assert.match(appService, /runPreviewGenerationJob\(row\.id\)/)
   assert.match(appService, /runGenerationJob\(row\.id\)/)
   assert.match(worker, /runGenerationWorker/)
+  assert.match(webPage, /Encolar semana/)
+  assert.match(webPage, /runNow: false/)
+  assert.match(webPage, /Ejecutar ahora/)
   assert.match(dbPackage, /"worker:generation": "tsx src\/generationWorker\.ts"/)
   assert.match(rootPackage, /"worker:generation": "npm --workspace @menumaker\/db run worker:generation"/)
 })

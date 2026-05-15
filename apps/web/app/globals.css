@@ -267,6 +267,13 @@ p {
   gap: 3px;
 }
 
+.job-actions,
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .job-remediation {
   border-left: 3px solid rgba(162, 58, 43, 0.48);
   padding: 7px 0 7px 10px;
