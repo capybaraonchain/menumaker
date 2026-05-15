@@ -50,6 +50,7 @@ import {
 
 export interface AppState {
   provider?: unknown
+  runtimeSettings: RuntimeSettings
   profiles: ProfileRow[]
   activeProfile: ProfileRow | null
   currentMenu: WeeklyMenuView | null
@@ -57,6 +58,19 @@ export interface AppState {
   history: MenuHistoryItem[]
   generationJobs: GenerationJobView[]
   mappableFoods: MappableFoodView[]
+}
+
+export interface RuntimeSettings {
+  recipeTemplateFallbackAllowed: boolean
+  weekSkeletonFallbackAllowed: boolean
+  sources: {
+    recipeTemplateFallback: 'app_setting' | 'env'
+    weekSkeletonFallback: 'app_setting' | 'env'
+  }
+}
+
+export interface SetFallbackPolicyResult {
+  runtimeSettings: RuntimeSettings
 }
 
 export interface ProfileRow {
@@ -488,6 +502,7 @@ export async function getAppState(profileId?: string): Promise<AppState> {
   const profiles = await listProfiles()
   const activeProfile = profiles.find((profile) => profile.id === profileId) ?? profiles[0] ?? null
   return {
+    runtimeSettings: await getRuntimeSettings(),
     profiles,
     activeProfile,
     currentMenu: activeProfile ? await getCurrentMenu(activeProfile.id) : null,
@@ -645,6 +660,46 @@ export async function saveIngredientMapping(
 
 export async function analyzeRecipeNutrition(recipe: RecipeCandidate, bannedFoods: string[] = []) {
   return scoreRecipeWithUserMappings(recipe, bannedFoods)
+}
+
+export async function getRuntimeSettings(): Promise<RuntimeSettings> {
+  const [recipe, skeleton] = await Promise.all([
+    readBooleanRuntimeSetting('recipeTemplateFallbackAllowed', 'ALLOW_RECIPE_TEMPLATE_FALLBACK', true),
+    readBooleanRuntimeSetting('weekSkeletonFallbackAllowed', 'ALLOW_WEEK_SKELETON_FALLBACK', true),
+  ])
+  return {
+    recipeTemplateFallbackAllowed: recipe.value,
+    weekSkeletonFallbackAllowed: skeleton.value,
+    sources: {
+      recipeTemplateFallback: recipe.source,
+      weekSkeletonFallback: skeleton.source,
+    },
+  }
+}
+
+export async function setFallbackPolicy(input: {
+  recipeTemplateFallbackAllowed?: boolean
+  weekSkeletonFallbackAllowed?: boolean
+}): Promise<SetFallbackPolicyResult> {
+  if (input.recipeTemplateFallbackAllowed === undefined && input.weekSkeletonFallbackAllowed === undefined) {
+    throw new Error('Selecciona al menos una política de fallback para actualizar.')
+  }
+  const sql = sqlClient()
+  if (input.recipeTemplateFallbackAllowed !== undefined) {
+    await sql`
+      insert into app_settings (user_id, key, value, updated_at)
+      values (${localUserId()}, 'recipeTemplateFallbackAllowed', ${sql.json(input.recipeTemplateFallbackAllowed as any)}, now())
+      on conflict (user_id, key) do update set value = excluded.value, updated_at = now()
+    `
+  }
+  if (input.weekSkeletonFallbackAllowed !== undefined) {
+    await sql`
+      insert into app_settings (user_id, key, value, updated_at)
+      values (${localUserId()}, 'weekSkeletonFallbackAllowed', ${sql.json(input.weekSkeletonFallbackAllowed as any)}, now())
+      on conflict (user_id, key) do update set value = excluded.value, updated_at = now()
+    `
+  }
+  return { runtimeSettings: await getRuntimeSettings() }
 }
 
 export async function planChatCommandCached(input: ChatCommandPlanningInput): Promise<CachedPlannedChatCommand | null> {
@@ -1369,7 +1424,7 @@ export async function previewRegenerateDayPlan(dayPlanId: string): Promise<Regen
     decisions,
     fallbackSlots: [...fallbackSlots],
     trace: {
-      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      fallbackAllowed: await recipeTemplateFallbackAllowed(),
       slots: traces,
     },
   })
@@ -1400,7 +1455,7 @@ export async function previewRegenerateMealPlan(menuMealId: string): Promise<Reg
     decisions,
     fallbackSlots,
     trace: {
-      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      fallbackAllowed: await recipeTemplateFallbackAllowed(),
       slots: trace,
     },
   })
@@ -1973,7 +2028,7 @@ async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): 
     skeletonTrace: skeletonResult.trace,
     repair,
     trace: {
-      fallbackAllowed: recipeTemplateFallbackAllowed(),
+      fallbackAllowed: await recipeTemplateFallbackAllowed(),
       slots: slotTraces,
     },
   }
@@ -2001,7 +2056,7 @@ async function buildWeekSkeleton(profile: ProfileRow, targets: MacroTargets): Pr
         providerConfigured: result.providerConfigured,
         providerSource: result.source,
         cacheHit: Boolean(result.cacheHit),
-        fallbackAllowed: weekSkeletonFallbackAllowed(),
+        fallbackAllowed: await weekSkeletonFallbackAllowed(),
         fallbackUsed: false,
         fallbackReason: 'none',
         error: result.error,
@@ -2009,7 +2064,7 @@ async function buildWeekSkeleton(profile: ProfileRow, targets: MacroTargets): Pr
     }
   }
 
-  const fallbackAllowed = weekSkeletonFallbackAllowed()
+  const fallbackAllowed = await weekSkeletonFallbackAllowed()
   if (!fallbackAllowed) {
     throw new Error(`No se pudo generar el esqueleto semanal con LLM. El fallback determinístico está desactivado por ALLOW_WEEK_SKELETON_FALLBACK=false.`)
   }
@@ -2155,7 +2210,7 @@ async function recipePoolForSlot(input: {
         cacheHit: Boolean(llmResult.cacheHit),
         llmRawCandidateCount: llmResult.recipes.length,
         acceptedLlmCandidateCount: llmRecipes.length,
-        fallbackAllowed: recipeTemplateFallbackAllowed(),
+        fallbackAllowed: await recipeTemplateFallbackAllowed(),
         fallbackUsed: false,
         fallbackReason: 'none',
         fallbackCandidateCount: 0,
@@ -2165,7 +2220,7 @@ async function recipePoolForSlot(input: {
     }
   }
 
-  const fallbackAllowed = recipeTemplateFallbackAllowed()
+  const fallbackAllowed = await recipeTemplateFallbackAllowed()
   const fallbackReason = recipeFallbackReason(llmResult, llmRecipes.length)
   if (!fallbackAllowed) {
     throw new Error(`No hay suficientes recetas LLM válidas para ${slotLabel(input.slot)} (${llmRecipes.length}/${Math.min(input.count, 3)}). El fallback determinístico está desactivado por ALLOW_RECIPE_TEMPLATE_FALLBACK=false.`)
@@ -2255,14 +2310,12 @@ function aiCacheInputHash(schemaVersion: string, input: unknown, model: string, 
   })
 }
 
-function recipeTemplateFallbackAllowed(): boolean {
-  loadDotEnv()
-  return String(process.env.ALLOW_RECIPE_TEMPLATE_FALLBACK ?? 'true').toLowerCase() !== 'false'
+async function recipeTemplateFallbackAllowed(): Promise<boolean> {
+  return (await getRuntimeSettings()).recipeTemplateFallbackAllowed
 }
 
-function weekSkeletonFallbackAllowed(): boolean {
-  loadDotEnv()
-  return String(process.env.ALLOW_WEEK_SKELETON_FALLBACK ?? 'true').toLowerCase() !== 'false'
+async function weekSkeletonFallbackAllowed(): Promise<boolean> {
+  return (await getRuntimeSettings()).weekSkeletonFallbackAllowed
 }
 
 function recipeFallbackReason(result: RecipeGenerationResult, acceptedCount: number): RecipePoolTrace['fallbackReason'] {
@@ -2280,6 +2333,24 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   const object = value as Record<string, unknown>
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`
+}
+
+async function readBooleanRuntimeSetting(
+  key: string,
+  envName: string,
+  defaultValue: boolean,
+): Promise<{ value: boolean; source: 'app_setting' | 'env' }> {
+  const sql = sqlClient()
+  const [row] = await sql<Array<{ value: unknown }>>`
+    select value from app_settings
+    where user_id = ${localUserId()} and key = ${key}
+    limit 1
+  `
+  if (typeof row?.value === 'boolean') return { value: row.value, source: 'app_setting' }
+  loadDotEnv()
+  const envValue = process.env[envName]
+  if (envValue === undefined) return { value: defaultValue, source: 'env' }
+  return { value: String(envValue).toLowerCase() !== 'false', source: 'env' }
 }
 
 interface IngredientAliasMapping {

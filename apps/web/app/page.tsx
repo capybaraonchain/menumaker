@@ -86,7 +86,16 @@ type AppState = {
   history: Array<{ id: string; weekStart: string; createdAt: string; nutrition: Nutrition }>
   generationJobs: GenerationJob[]
   mappableFoods: MappableFood[]
+  runtimeSettings: RuntimeSettings
   provider?: any
+}
+type RuntimeSettings = {
+  recipeTemplateFallbackAllowed: boolean
+  weekSkeletonFallbackAllowed: boolean
+  sources: {
+    recipeTemplateFallback: string
+    weekSkeletonFallback: string
+  }
 }
 type MappableFood = { id: string; name: string; category: string; aliases: string[] }
 type GenerationJob = {
@@ -797,6 +806,18 @@ function JobRemediation({
                 </button>
               )
             }
+            if (action.kind === 'enable_fallback') {
+              return (
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onAction({
+                  action: 'setFallbackPolicy',
+                  profileId: profile?.id ?? job.profileId ?? undefined,
+                  recipeTemplateFallbackAllowed: true,
+                  weekSkeletonFallbackAllowed: true,
+                })}>
+                  {action.label}
+                </button>
+              )
+            }
             return <span key={`${action.kind}-${action.label}`}>{action.label}</span>
           })}
         </div>
@@ -1036,6 +1057,16 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
   const [deleteName, setDeleteName] = useState('')
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [fallbackBusy, setFallbackBusy] = useState<string | null>(null)
+  const settings = state.runtimeSettings
+  async function updateFallback(key: 'recipeTemplateFallbackAllowed' | 'weekSkeletonFallbackAllowed', value: boolean) {
+    setFallbackBusy(key)
+    try {
+      await onAction({ action: 'setFallbackPolicy', profileId: profile.id, [key]: value })
+    } finally {
+      setFallbackBusy(null)
+    }
+  }
   return (
     <section className="profile-screen">
       <h2>Perfil</h2>
@@ -1054,6 +1085,36 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
         <p><strong>No me gusta:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
         <p><strong>Prohibidos:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
       </div>
+      <section className="settings-panel">
+        <div>
+          <h3>Generación local</h3>
+          <p>Controla si la app puede usar muletas determinísticas cuando el LLM no entrega suficientes candidatos válidos.</p>
+        </div>
+        <label className="settings-toggle">
+          <span>
+            <strong>Fallback de recetas</strong>
+            <small>{settings.sources.recipeTemplateFallback === 'app_setting' ? 'Configurado en la app' : 'Por defecto/env'} · {settings.recipeTemplateFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.recipeTemplateFallbackAllowed}
+            disabled={fallbackBusy !== null}
+            onChange={(event) => updateFallback('recipeTemplateFallbackAllowed', event.target.checked)}
+          />
+        </label>
+        <label className="settings-toggle">
+          <span>
+            <strong>Fallback de esqueleto semanal</strong>
+            <small>{settings.sources.weekSkeletonFallback === 'app_setting' ? 'Configurado en la app' : 'Por defecto/env'} · {settings.weekSkeletonFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.weekSkeletonFallbackAllowed}
+            disabled={fallbackBusy !== null}
+            onChange={(event) => updateFallback('weekSkeletonFallbackAllowed', event.target.checked)}
+          />
+        </label>
+      </section>
       <section className="danger-zone">
         <div>
           <h3>Zona de borrado</h3>

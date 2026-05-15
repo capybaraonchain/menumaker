@@ -58,6 +58,7 @@ const pendingActionNames = [
   'relaxProfilePreferences',
   'startWeeklyMenuGeneration',
   'runGenerationJob',
+  'setFallbackPolicy',
 ] as const
 
 function json(value: unknown) {
@@ -300,6 +301,24 @@ server.registerTool(
   async ({ profileId, ingredientName, canonicalFoodName, confirmed }) => {
     requireConfirmation(confirmed, 'save ingredient mapping')
     return json(await executeAppAction('saveIngredientMapping', { profileId, ingredientName, canonicalFoodName }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'set_fallback_policy',
+  {
+    description: 'Mutation: explicitly enable or disable local deterministic fallback for recipe templates and week skeletons. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid().optional(),
+      recipeTemplateFallbackAllowed: z.boolean().optional(),
+      weekSkeletonFallbackAllowed: z.boolean().optional(),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, recipeTemplateFallbackAllowed, weekSkeletonFallbackAllowed, confirmed }) => {
+    requireConfirmation(confirmed, 'set fallback policy')
+    return json(await executeAppAction('setFallbackPolicy', { profileId, recipeTemplateFallbackAllowed, weekSkeletonFallbackAllowed }, 'mcp'))
   },
 )
 

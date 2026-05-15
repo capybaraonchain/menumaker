@@ -16,6 +16,7 @@ import {
   runGenerationJob,
   saveIngredientMapping,
   saveProfilePreference,
+  setFallbackPolicy,
   relaxProfilePreferences,
   starRecipe,
   suggestMealReplacements,
@@ -141,6 +142,11 @@ export const appActionSchemas = {
     profileId: uuid,
     ingredientName: z.string().min(1),
     canonicalFoodName: z.string().min(1),
+  }),
+  setFallbackPolicy: z.object({
+    profileId: uuid.optional(),
+    recipeTemplateFallbackAllowed: z.boolean().optional(),
+    weekSkeletonFallbackAllowed: z.boolean().optional(),
   }),
 } as const
 
@@ -492,6 +498,37 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       const mapping = await saveIngredientMapping(input.profileId, input.ingredientName, input.canonicalFoodName)
       return {
         mapping,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  setFallbackPolicy: {
+    name: 'setFallbackPolicy',
+    inputSchema: appActionSchemas.setFallbackPolicy,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.set_fallback_policy',
+    confirmationCopyEs: (input) => {
+      const changes = [
+        input.recipeTemplateFallbackAllowed === undefined ? null : `fallback de recetas ${input.recipeTemplateFallbackAllowed ? 'habilitado' : 'deshabilitado'}`,
+        input.weekSkeletonFallbackAllowed === undefined ? null : `fallback de esqueleto semanal ${input.weekSkeletonFallbackAllowed ? 'habilitado' : 'deshabilitado'}`,
+      ].filter(Boolean)
+      return `Se actualizará la política local de generación: ${changes.join(', ')}. ¿Continuar?`
+    },
+    successCopyEs: (_, result) => {
+      const settings = result && typeof result === 'object'
+        ? (result as { runtimeSettings?: { recipeTemplateFallbackAllowed?: boolean; weekSkeletonFallbackAllowed?: boolean } }).runtimeSettings
+        : null
+      return settings
+        ? `Listo. Fallback recetas: **${settings.recipeTemplateFallbackAllowed ? 'habilitado' : 'deshabilitado'}**. Fallback esqueleto: **${settings.weekSkeletonFallbackAllowed ? 'habilitado' : 'deshabilitado'}**.`
+        : 'Listo. Actualicé la política local de fallback.'
+    },
+    async execute(input) {
+      const result = await setFallbackPolicy({
+        recipeTemplateFallbackAllowed: input.recipeTemplateFallbackAllowed,
+        weekSkeletonFallbackAllowed: input.weekSkeletonFallbackAllowed,
+      })
+      return {
+        ...result,
         state: await appStateResult(input.profileId),
       }
     },

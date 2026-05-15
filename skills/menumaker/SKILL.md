@@ -53,6 +53,7 @@ For recipe generation:
 - Accept only candidates that the deterministic service validates for ingredients, nutrition confidence, preparation time, variety, and day/week macro fit.
 - Treat deterministic recipe templates as local fallback only when the provider is unavailable or no valid generated candidates remain.
 - Treat deterministic week skeletons as local fallback only when the provider is unavailable or returns an invalid skeleton.
+- Use `set_fallback_policy` only after confirmation when the user wants live-test fail-loud behavior or local fallback behavior changed.
 - Check generation metadata when explaining a menu: recipe source, skeleton source, fallback slots, cache hits, and repair actions.
 
 For regeneration:
@@ -96,6 +97,7 @@ For generation failures or progress:
 1. Call `get_generation_jobs` for the active profile.
 2. Explain the persisted status, last log step, failure code, retry count, and error in Spanish for Spanish profiles.
 3. Prefer the persisted `generationSummary` when present; it is either a cached LLM summary or an explicit deterministic fallback.
+4. If remediation offers fallback enablement, explain that it changes local generation policy and call `set_fallback_policy` only after confirmation.
 4. Prefer persisted `remediation` / `repairRemediation` when present; these are deterministic next steps keyed to failure or repair reason.
 5. When discussing repairs, use the recorded `RepairRequest` / `RepairResult` telemetry instead of guessing why a meal changed.
 6. Do not invent hidden progress if the job row has not changed.

@@ -263,6 +263,14 @@ create table if not exists ai_cache (
   unique(input_hash, model, schema_version)
 );
 
+create table if not exists app_settings (
+  user_id uuid not null references users(id) on delete cascade,
+  key text not null,
+  value jsonb not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, key)
+);
+
 create index if not exists idx_profiles_user on profiles(user_id);
 create index if not exists idx_weekly_menus_profile on weekly_menus(profile_id);
 create index if not exists idx_day_plans_menu on day_plans(weekly_menu_id);

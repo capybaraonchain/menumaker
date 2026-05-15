@@ -50,6 +50,7 @@ Read-only tools:
 - `get_generation_jobs`
 - `analyze_recipe_nutrition`
 - `save_ingredient_mapping`
+- `set_fallback_policy`
 - `explain_macro_targets`
 
 Proposal tools can run freely because they do not persist broad changes.
@@ -211,6 +212,7 @@ The companion skill should instruct agents to:
 - Explain whether a calorie adjustment changed portions, rebalanced ingredients, or replaced recipes.
 - Validate replacement recipes against the day and week, not only the single meal.
 - Treat recipe generation and replacement tools as LLM-first proposal tools with deterministic validation. Deterministic templates are fallback only and should not be presented as the ideal recipe source.
+- Use `set_fallback_policy` only after explicit confirmation when switching live-test behavior between fail-loud LLM mode and local deterministic fallback.
 - Keep responses focused on weekly diet planning, not pantry, shopping, or medical nutrition.
 
 The skill should discourage agents from:

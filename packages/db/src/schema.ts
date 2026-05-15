@@ -251,3 +251,10 @@ export const aiCache = pgTable('ai_cache', {
   output: jsonb('output').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+export const appSettings = pgTable('app_settings', {
+  userId: uuid('user_id').notNull().references(() => users.id),
+  key: text('key').notNull(),
+  value: jsonb('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})

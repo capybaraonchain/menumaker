@@ -121,10 +121,12 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Generation jobs have persisted status and logs. Rich async progress UI is deferred in Section 12.
 - [x] Week skeleton generation exists and is LLM-first when the local Codex provider is configured.
 - [x] Week skeleton fallback can be disabled with `ALLOW_WEEK_SKELETON_FALLBACK=false`.
+- [x] Week skeleton fallback can be enabled/disabled from persisted local app settings.
 - [x] Recipe candidate generation exists.
 - [x] Recipe candidate generation is LLM-first when the local Codex provider is configured.
 - [x] Deterministic recipe templates are explicit fallback only and still pass validation/scoring.
 - [x] Template fallback can be disabled with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false`.
+- [x] Template fallback can be enabled/disabled from Perfil and MCP without editing env files.
 - [x] Menu state surfaces fallback slots and recipe-source metadata.
 - [x] Successful structured recipe generations are cached in `ai_cache`.
 - [x] Successful structured week skeleton generations are cached in `ai_cache`.

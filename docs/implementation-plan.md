@@ -222,6 +222,7 @@ Implement:
 - LLM-first week skeleton generation with deterministic skeleton fallback only when the provider is unavailable or invalid.
 - `ALLOW_RECIPE_TEMPLATE_FALLBACK=false` live mode for failing loudly instead of silently using templates.
 - `ALLOW_WEEK_SKELETON_FALLBACK=false` live mode for failing loudly instead of silently assembling a deterministic skeleton.
+- Persisted local fallback policy in `app_settings`, with Perfil and MCP controls overriding env defaults.
 - AI cache reads/writes for successful structured recipe candidate generations.
 - AI cache reads/writes for successful structured week skeleton generations.
 - AI cache reads/writes for chat tool planning.
@@ -236,6 +237,7 @@ Acceptance:
 - Failures are represented with explicit codes.
 - Structured outputs are validated before use.
 - Fallback recipe templates are not used as the primary source when the provider is configured and valid candidates pass scoring.
+- Fallback policy is visible and can be changed without editing env files.
 - Menu generation metadata records recipe source, skeleton source, fallback slots, fallback policy, repair trace, and AI-cache hits.
 - Chat responses can report cache hits without exposing provider tokens.
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.

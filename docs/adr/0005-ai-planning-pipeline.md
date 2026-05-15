@@ -101,7 +101,7 @@ Recipe generation must respect:
 
 The primary recipe source is the LLM recipe-candidate generator. Deterministic recipe templates are allowed only as an explicit local fallback when the provider is unavailable, the provider call fails, or too few generated candidates pass validation.
 
-The fallback must be controllable with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false`. In that live-test mode, generation should fail loudly instead of silently filling missing candidates from templates.
+The fallback must be controllable with persisted local app settings, with `ALLOW_RECIPE_TEMPLATE_FALLBACK=false` remaining the env default for fresh local setups. In live-test mode, generation should fail loudly instead of silently filling missing candidates from templates.
 
 This applies to:
 
@@ -162,7 +162,7 @@ Weekly generation creates a first-class `WeekSkeleton` before recipe candidates 
 
 The preferred source is the configured LLM provider. The skeleton contains seven days, every default meal slot, a concise intent for each meal, and nearby repetition warnings. Recipe candidate generation receives the skeleton intent so the model is not only filling isolated slot macros.
 
-For local v1, a deterministic skeleton fallback is allowed when the provider is missing, stale, failed, or returns an invalid skeleton. This fallback must be recorded in generation metadata and can be disabled with `ALLOW_WEEK_SKELETON_FALLBACK=false`.
+For local v1, a deterministic skeleton fallback is allowed when the provider is missing, stale, failed, or returns an invalid skeleton. This fallback must be recorded in generation metadata and can be disabled through local app settings, with `ALLOW_WEEK_SKELETON_FALLBACK=false` as the env default.
 
 Successful structured skeleton generations are cached with the same AI cache policy as recipe candidates: input hash, model, reasoning effort, and schema version.
 
