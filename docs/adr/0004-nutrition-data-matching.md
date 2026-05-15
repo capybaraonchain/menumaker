@@ -174,6 +174,8 @@ npm --workspace @menumaker/db run nutrition:import:off -- 3017620422003
 
 The Open Food Facts adapter uses the public product-by-barcode API, imports per-100g macros from `nutriments`, stores the barcode as the source ID, and marks confidence as `barcode`.
 
+The same import is exposed through the shared app action registry and MCP as `import_open_food_facts_product`, behind explicit confirmation. Agents should use that tool instead of shelling out to the CLI when operating MenuMaker.
+
 ## V1 Source Plan
 
 For v1:

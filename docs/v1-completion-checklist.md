@@ -90,6 +90,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Seed nutrition dataset exists for local v1.
 - [x] External/source nutrition records can be imported into `source_foods`, `nutrition_records`, and `food_mappings`.
 - [x] Open Food Facts barcode products can be fetched and imported into the source nutrition tables.
+- [x] Open Food Facts import is exposed through the shared app action registry and MCP.
 - [x] Generation, meal-edit, and calorie-adjustment scoring read the database nutrition catalog before falling back to seed foods.
 - [x] Ingredient aliases work in Spanish and English.
 - [x] User-confirmed ingredient aliases can be saved and reused by the scorer.

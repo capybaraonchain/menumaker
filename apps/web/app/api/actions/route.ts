@@ -28,6 +28,7 @@ const legacyActionNames: Record<string, AppActionName> = {
   runGenerationJob: 'runGenerationJob',
   savePreference: 'savePreference',
   saveIngredientMapping: 'saveIngredientMapping',
+  importOpenFoodFactsProduct: 'importOpenFoodFactsProduct',
   setFallbackPolicy: 'setFallbackPolicy',
   startWeeklyMenuGeneration: 'startWeeklyMenuGeneration',
   starRecipe: 'starRecipe',

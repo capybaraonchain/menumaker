@@ -32,6 +32,7 @@ import {
 import type { CalorieAdjustmentPlan } from './caloriePlanner'
 import { sqlClient } from './client'
 import { localUserId } from './env'
+import { importOpenFoodFactsBarcodes } from './nutritionSourceImport'
 
 const uuid = z.string().uuid()
 
@@ -165,6 +166,10 @@ export const appActionSchemas = {
     profileId: uuid,
     ingredientName: z.string().min(1),
     canonicalFoodName: z.string().min(1),
+  }),
+  importOpenFoodFactsProduct: z.object({
+    profileId: uuid.optional(),
+    barcode: z.string().regex(/^\d{6,14}$/, 'Código de barras inválido.'),
   }),
   setFallbackPolicy: z.object({
     profileId: uuid.optional(),
@@ -558,6 +563,27 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       const mapping = await saveIngredientMapping(input.profileId, input.ingredientName, input.canonicalFoodName)
       return {
         mapping,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
+  importOpenFoodFactsProduct: {
+    name: 'importOpenFoodFactsProduct',
+    inputSchema: appActionSchemas.importOpenFoodFactsProduct,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.import_open_food_facts_product',
+    confirmationCopyEs: (input) => `Se consultará Open Food Facts y se importará el producto con código **${input.barcode}** como fuente nutricional determinística. ¿Continuar?`,
+    successCopyEs: (_, result) => {
+      const records = result && typeof result === 'object' ? (result as { records?: Array<{ canonicalName?: string }> }).records : null
+      const names = records?.map((record) => record.canonicalName).filter(Boolean) ?? []
+      return names.length > 0
+        ? `Listo. Importé **${names.join(', ')}** desde Open Food Facts.`
+        : 'Listo. Importé el producto desde Open Food Facts.'
+    },
+    async execute(input) {
+      const result = await importOpenFoodFactsBarcodes([input.barcode])
+      return {
+        ...result,
         state: await appStateResult(input.profileId),
       }
     },

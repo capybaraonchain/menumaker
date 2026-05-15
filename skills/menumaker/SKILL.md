@@ -84,9 +84,10 @@ For macro questions:
 For ingredient matching issues:
 
 1. Inspect the failed job or low-confidence recipe ingredient.
-2. Ask the user which deterministic food it should map to.
-3. Call `save_ingredient_mapping` only after confirmation.
-4. Retry generation or rerun nutrition analysis through deterministic tools; do not bypass validation.
+2. If the user has a packaged-product barcode, ask for confirmation and call `import_open_food_facts_product` before mapping aliases.
+3. Ask the user which deterministic food it should map to only when no source record is available or the issue is an alias.
+4. Call `save_ingredient_mapping` only after confirmation.
+5. Retry generation or rerun nutrition analysis through deterministic tools; do not bypass validation.
 
 For in-app chat behavior:
 

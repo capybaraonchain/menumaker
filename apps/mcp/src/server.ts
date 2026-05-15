@@ -63,6 +63,7 @@ const pendingActionNames = [
   'startWeeklyMenuGeneration',
   'runGenerationJob',
   'setFallbackPolicy',
+  'importOpenFoodFactsProduct',
 ] as const
 
 function json(value: unknown) {
@@ -339,6 +340,23 @@ server.registerTool(
   async ({ profileId, ingredientName, canonicalFoodName, confirmed }) => {
     requireConfirmation(confirmed, 'save ingredient mapping')
     return json(await executeAppAction('saveIngredientMapping', { profileId, ingredientName, canonicalFoodName }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'import_open_food_facts_product',
+  {
+    description: 'Mutation: fetch a packaged product by barcode from Open Food Facts and import its per-100g nutrition into MenuMaker source tables. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid().optional(),
+      barcode: z.string().regex(/^\d{6,14}$/),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: true },
+  },
+  async ({ profileId, barcode, confirmed }) => {
+    requireConfirmation(confirmed, 'import Open Food Facts product')
+    return json(await executeAppAction('importOpenFoodFactsProduct', { profileId, barcode }, 'mcp'))
   },
 )
 

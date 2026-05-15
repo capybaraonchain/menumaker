@@ -56,3 +56,16 @@ test('app scoring reads nutrition source tables before falling back to seed food
   assert.match(seed, /on conflict \(food_id, source_id\) do update set/)
   assert.match(migration, /nutrition_records_food_source_idx/)
 })
+
+test('Open Food Facts import is exposed through shared actions and MCP', () => {
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+  const apiRoute = readFileSync(resolve(root, 'apps/web/app/api/actions/route.ts'), 'utf8')
+
+  assert.match(appActions, /importOpenFoodFactsProduct: z\.object/)
+  assert.match(appActions, /importOpenFoodFactsBarcodes\(\[input\.barcode\]\)/)
+  assert.match(appActions, /auditLabel: 'mutation\.import_open_food_facts_product'/)
+  assert.match(mcp, /'import_open_food_facts_product'/)
+  assert.match(mcp, /executeAppAction\('importOpenFoodFactsProduct'/)
+  assert.match(apiRoute, /importOpenFoodFactsProduct: 'importOpenFoodFactsProduct'/)
+})
