@@ -1,28 +1,34 @@
 import type { IngredientLine, MatchedIngredient, NutritionConfidence, NutritionTotals, RecipeCandidate, ScoredRecipe } from '@menumaker/core'
 import { seedFoods, type SeedFood } from './seedFoods'
 
-const unitToGram: Record<string, number> = {
-  g: 1,
-  gr: 1,
-  gram: 1,
-  grams: 1,
-  gramo: 1,
-  gramos: 1,
-  kg: 1000,
-  ml: 1,
-  tbsp: 13.5,
-  tablespoon: 13.5,
-  cucharada: 13.5,
-  cucharadas: 13.5,
-  tsp: 4.5,
-  teaspoon: 4.5,
-  cucharadita: 4.5,
-  unidad: 80,
-  unidades: 80,
-  pieza: 80,
-  piezas: 80,
-  rebanada: 30,
-  rebanadas: 30,
+const genericUnitToGram: Record<string, { grams: number; confidence: NutritionConfidence; note: string }> = {
+  g: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  gr: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  gram: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  grams: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  gramo: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  gramos: { grams: 1, confidence: 'database', note: 'Gramos.' },
+  kg: { grams: 1000, confidence: 'database', note: 'Conversión exacta de kilogramos a gramos.' },
+  ml: { grams: 1, confidence: 'database', note: 'Mililitros tratados como gramos para ingredientes de densidad cercana al agua.' },
+  l: { grams: 1000, confidence: 'generic', note: 'Litros tratados como gramos aproximados.' },
+  litro: { grams: 1000, confidence: 'generic', note: 'Litros tratados como gramos aproximados.' },
+  litros: { grams: 1000, confidence: 'generic', note: 'Litros tratados como gramos aproximados.' },
+  tbsp: { grams: 13.5, confidence: 'generic', note: 'Cucharada genérica aproximada.' },
+  tablespoon: { grams: 13.5, confidence: 'generic', note: 'Cucharada genérica aproximada.' },
+  cucharada: { grams: 13.5, confidence: 'generic', note: 'Cucharada genérica aproximada.' },
+  cucharadas: { grams: 13.5, confidence: 'generic', note: 'Cucharada genérica aproximada.' },
+  tsp: { grams: 4.5, confidence: 'generic', note: 'Cucharadita genérica aproximada.' },
+  teaspoon: { grams: 4.5, confidence: 'generic', note: 'Cucharadita genérica aproximada.' },
+  cucharadita: { grams: 4.5, confidence: 'generic', note: 'Cucharadita genérica aproximada.' },
+  cucharaditas: { grams: 4.5, confidence: 'generic', note: 'Cucharadita genérica aproximada.' },
+  taza: { grams: 180, confidence: 'estimated', note: 'Taza genérica; se usa solo si no hay conversión específica del alimento.' },
+  cup: { grams: 180, confidence: 'estimated', note: 'Taza genérica; se usa solo si no hay conversión específica del alimento.' },
+  unidad: { grams: 80, confidence: 'estimated', note: 'Unidad genérica; se usa solo si no hay conversión específica del alimento.' },
+  unidades: { grams: 80, confidence: 'estimated', note: 'Unidad genérica; se usa solo si no hay conversión específica del alimento.' },
+  pieza: { grams: 80, confidence: 'estimated', note: 'Pieza genérica; se usa solo si no hay conversión específica del alimento.' },
+  piezas: { grams: 80, confidence: 'estimated', note: 'Pieza genérica; se usa solo si no hay conversión específica del alimento.' },
+  rebanada: { grams: 30, confidence: 'estimated', note: 'Rebanada genérica; se usa solo si no hay conversión específica del alimento.' },
+  rebanadas: { grams: 30, confidence: 'estimated', note: 'Rebanada genérica; se usa solo si no hay conversión específica del alimento.' },
 }
 
 export function normalizeIngredientName(value: string): string {
@@ -51,10 +57,20 @@ export function matchFood(name: string, bannedFoods: string[] = []): SeedFood | 
   return best && best.score >= 80 ? best.food : null
 }
 
-export function normalizeAmount(line: IngredientLine): { amount: number; unit: 'g' | 'ml'; confidence: NutritionConfidence; notes: string[] } {
+export function normalizeAmount(line: IngredientLine, food?: SeedFood | null): { amount: number; unit: 'g' | 'ml'; confidence: NutritionConfidence; notes: string[] } {
   const unit = normalizeIngredientName(line.unit)
-  const factor = unitToGram[unit]
-  if (!factor) {
+  const foodSpecific = foodSpecificUnitConversion(food, unit)
+  if (foodSpecific) {
+    return {
+      amount: line.amount * foodSpecific.grams,
+      unit: 'g',
+      confidence: foodSpecific.confidence,
+      notes: [`Conversión específica de ${line.unit} para ${food?.aliases[0] ?? food?.canonicalName}: ${foodSpecific.note}`],
+    }
+  }
+
+  const conversion = genericUnitToGram[unit]
+  if (!conversion) {
     return {
       amount: line.amount,
       unit: 'g',
@@ -63,16 +79,16 @@ export function normalizeAmount(line: IngredientLine): { amount: number; unit: '
     }
   }
   return {
-    amount: line.amount * factor,
+    amount: line.amount * conversion.grams,
     unit: unit === 'ml' ? 'ml' : 'g',
-    confidence: unit === 'ml' || factor === 1 ? 'database' : 'generic',
-    notes: factor === 1 ? [] : [`Conversión aproximada de ${line.unit} a gramos.`],
+    confidence: conversion.confidence,
+    notes: conversion.grams === 1 && conversion.confidence === 'database' ? [] : [conversion.note],
   }
 }
 
 export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: string[] = []): MatchedIngredient {
-  const normalized = normalizeAmount(line)
   const food = matchFood(line.name, bannedFoods)
+  const normalized = normalizeAmount(line, food)
 
   if (!food) {
     return {
@@ -104,6 +120,20 @@ export function calculateIngredientNutrition(line: IngredientLine, bannedFoods: 
     },
     notes: normalized.notes,
   }
+}
+
+function foodSpecificUnitConversion(food: SeedFood | null | undefined, normalizedUnit: string): { grams: number; confidence: NutritionConfidence; note: string } | null {
+  if (!food?.householdUnits) return null
+  for (const conversion of food.householdUnits) {
+    if (conversion.units.map(normalizeIngredientName).includes(normalizedUnit)) {
+      return {
+        grams: conversion.grams,
+        confidence: conversion.confidence,
+        note: conversion.note,
+      }
+    }
+  }
+  return null
 }
 
 export function scoreRecipe(recipe: RecipeCandidate, bannedFoods: string[] = []): ScoredRecipe {
@@ -146,4 +176,3 @@ function lowerConfidence(a: NutritionConfidence, b: NutritionConfidence): Nutrit
 function round(value: number): number {
   return Math.round(value * 10) / 10
 }
-

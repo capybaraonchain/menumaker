@@ -13,6 +13,9 @@ async function main(): Promise<void> {
   `
 
   for (const food of seedFoods) {
+    await sql`delete from food_aliases where food_id = ${food.id}`
+    await sql`delete from food_mappings where source_id = ${`seed:${food.id}`}`
+    await sql`delete from nutrition_records where source_id = ${`seed:${food.id}`}`
     await sql`
       insert into food_items (id, canonical_name, category)
       values (${food.id}, ${food.canonicalName}, ${food.category})
@@ -43,11 +46,15 @@ async function main(): Promise<void> {
 
   const conversions = [
     ['g', 1, 'gramos exactos'],
+    ['kg', 1000, 'kilogramos exactos'],
     ['ml', 1, 'mililitros aproximados como gramos para v1'],
+    ['l', 1000, 'litros aproximados como gramos para v1'],
     ['cucharada', 13.5, 'conversión aproximada'],
     ['cucharadita', 4.5, 'conversión aproximada'],
-    ['rebanada', 30, 'conversión aproximada'],
-    ['unidad', 80, 'conversión aproximada'],
+    ['taza', 180, 'conversión genérica; las conversiones por alimento viven en el payload del alimento'],
+    ['rebanada', 30, 'conversión genérica; usar la conversión por alimento cuando exista'],
+    ['unidad', 80, 'conversión genérica; usar la conversión por alimento cuando exista'],
+    ['pieza', 80, 'conversión genérica; usar la conversión por alimento cuando exista'],
   ] as const
   for (const [unit, grams, notes] of conversions) {
     await sql`

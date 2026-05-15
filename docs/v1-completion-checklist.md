@@ -126,6 +126,8 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Menu state surfaces fallback slots and recipe-source metadata.
 - [x] Successful structured recipe generations are cached in `ai_cache`.
 - [x] Ingredient matching runs before finalization.
+- [x] Deterministic ingredient catalog covers the initial templates plus a broader common-food set for LLM-generated recipes.
+- [x] Ambiguous household units use food-specific serving conversions when available and downgrade confidence when falling back to generic estimates.
 - [x] Deterministic menu scoring exists.
 - [x] Deterministic targeted regeneration/replacement is bounded. Full LLM repair-loop orchestration is deferred beyond the local v1 slice.
 - [x] Failure states are explicit in domain schemas and job storage.

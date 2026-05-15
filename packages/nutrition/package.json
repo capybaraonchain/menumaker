@@ -8,10 +8,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/engine.test.ts"
   },
   "dependencies": {
     "@menumaker/core": "0.1.0"
   }
 }
-

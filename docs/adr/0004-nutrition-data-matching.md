@@ -61,6 +61,14 @@ Ingredient text normalization should handle:
 
 Quantity normalization should prefer grams and milliliters. Household units such as tablespoon, cup, piece, or slice require conversion. Unknown units should lower confidence.
 
+For v1, household conversions are resolved in this order:
+
+1. Food-specific serving conversion from the matched deterministic food, for example `2 huevos`, `1 plátano`, `2 rebanadas de pan integral`, or `1 taza de quinoa cocida`.
+2. Generic unit conversion for less ambiguous units such as `g`, `kg`, `ml`, `cucharada`, or `cucharadita`.
+3. Estimated generic fallback for ambiguous units such as `unidad`, `pieza`, `rebanada`, or `taza` when the matched food has no specific serving conversion.
+
+The app should preserve the confidence downgrade and notes produced by those conversions in ingredient snapshots.
+
 Candidate generation should use:
 
 - Exact saved mappings.

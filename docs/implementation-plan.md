@@ -137,6 +137,11 @@ For early local v1, include a small deterministic seed dataset with common foods
 - Broccoli.
 - Banana.
 - Tuna.
+- Salmon.
+- Avocado.
+- Spinach.
+- Whole wheat bread.
+- Common v1 expansion foods: turkey, lean beef, tofu, chickpeas, quinoa, pasta, sweet potato, zucchini, bell pepper, onion, carrot, mushrooms, cucumber, lettuce, apple, berries, cottage cheese, milk, almonds, and peanut butter.
 
 This seed dataset is not a substitute for USDA/Open Food Facts/BEDCA integration. It exists so the planner, UI, and nutrition calculation can work before full source coverage is implemented.
 
@@ -145,6 +150,7 @@ Implement:
 - Ingredient text normalization.
 - Gram/ml normalization for explicit metric units.
 - Basic unit conversions for common household units.
+- Food-specific serving conversions for ambiguous units such as `unidad`, `pieza`, `rebanada`, and `taza` when the matched food has a known serving weight.
 - Candidate matching from aliases and seed data.
 - Nutrition calculation per ingredient and recipe.
 - Confidence labels.
