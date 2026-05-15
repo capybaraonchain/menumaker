@@ -15,6 +15,7 @@ import {
   retryGenerationJob,
   runGenerationJob,
   saveProfilePreference,
+  relaxProfilePreferences,
   starRecipe,
   suggestMealReplacements,
   unstarRecipe,
@@ -121,6 +122,11 @@ export const appActionSchemas = {
   retryGenerationJob: z.object({
     profileId: uuid.optional(),
     jobId: uuid,
+  }),
+  relaxProfilePreferences: z.object({
+    profileId: uuid,
+    removeDislikes: z.array(z.string()).default([]),
+    removeBannedFoods: z.array(z.string()).default([]),
   }),
   startWeeklyMenuGeneration: z.object({
     profileId: uuid,
@@ -443,6 +449,32 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       }
     },
   },
+  relaxProfilePreferences: {
+    name: 'relaxProfilePreferences',
+    inputSchema: appActionSchemas.relaxProfilePreferences,
+    requiresConfirmation: true,
+    auditLabel: 'mutation.relax_profile_preferences',
+    confirmationCopyEs: (input) => {
+      const removed = [...input.removeDislikes, ...input.removeBannedFoods]
+      return `Se relajarán **${removed.length}** preferencia(s) del perfil para que el planner tenga más margen. ¿Continuar?`
+    },
+    successCopyEs: (_, result) => {
+      const removedDislikes = result && typeof result === 'object' && Array.isArray((result as { removedDislikes?: unknown[] }).removedDislikes)
+        ? (result as { removedDislikes: unknown[] }).removedDislikes.length
+        : 0
+      const removedBanned = result && typeof result === 'object' && Array.isArray((result as { removedBannedFoods?: unknown[] }).removedBannedFoods)
+        ? (result as { removedBannedFoods: unknown[] }).removedBannedFoods.length
+        : 0
+      return `Listo. Relajé ${removedDislikes + removedBanned} preferencia(s) del perfil.`
+    },
+    async execute(input) {
+      const result = await relaxProfilePreferences(input.profileId, input.removeDislikes, input.removeBannedFoods)
+      return {
+        ...result,
+        state: await appStateResult(input.profileId),
+      }
+    },
+  },
   startWeeklyMenuGeneration: {
     name: 'startWeeklyMenuGeneration',
     inputSchema: appActionSchemas.startWeeklyMenuGeneration,
@@ -683,6 +715,7 @@ function actionLabelEs(name: AppActionName, input: unknown): string {
   if (name === 'applySimilarReplacements') return 'Aplicar similares'
   if (name === 'deleteProfile') return 'Eliminar perfil'
   if (name === 'retryGenerationJob') return 'Reintentar generación'
+  if (name === 'relaxProfilePreferences') return 'Relajar preferencias'
   if (name === 'startWeeklyMenuGeneration') return 'Generar semana'
   if (name === 'runGenerationJob') return 'Ejecutar generación'
   return 'Continuar'

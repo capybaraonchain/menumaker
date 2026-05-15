@@ -212,7 +212,9 @@ Local v1 generation still executes inside requests by default, but weekly genera
 - [x] Banned-item conflict failure includes persisted remediation steps.
 - [x] Generation-exhausted failure includes retry and persisted remediation steps.
 - [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.
-- [x] Guided remediation forms remain deferred beyond the inline local v1 remediation panel.
+- [x] Guided preference-relaxation remediation can remove selected dislikes/prohibited foods through a typed action.
+- [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes.
+- [x] Guided ingredient-mapping, target-editing, fallback-policy, and repair-specific regeneration forms remain deferred.
 
 ## 13. In-App Chat
 

@@ -177,7 +177,7 @@ Failure states should be visible and actionable from persisted job metadata:
 
 The UI should explain what happened and offer the next reasonable action. Local v1 now stores deterministic remediation metadata on failed jobs and unresolved repair issues, so Semana and Historial can show specific next steps instead of a generic retry-only message.
 
-For failed generation jobs, the first safe action is still `Reintentar`. Guided remediation forms can add editable ingredient mapping, preference relaxation, and target-adjustment flows later.
+For failed generation jobs, the first safe action is still `Reintentar`. Local v1 also includes guided preference relaxation: the user can remove selected dislikes/prohibited foods and then retry the failed generation. Guided ingredient mapping and target-adjustment flows can be added later.
 
 ## Perfil Screen
 

@@ -94,7 +94,8 @@ For generation failures or progress:
 7. Use `enqueue_weekly_menu_generation` when the user wants to queue a weekly generation job without waiting for completion.
 8. Use `run_generation_job` when the user confirms execution of a queued generation job.
 9. Use `start_weekly_menu_generation` only when the user wants enqueue-and-run in one step.
-10. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
+10. Use `relax_profile_preferences` only after the user explicitly chooses which dislikes or banned foods to remove.
+11. Call `retry_generation_job` only when the job status is `failed` and the user confirms the retry.
 
 For profile deletion:
 

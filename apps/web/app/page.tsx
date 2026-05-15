@@ -111,6 +111,7 @@ type RemediationPlan = {
   actions: Array<{ kind: string; label: string; requiresConfirmation: boolean }>
   context?: Record<string, any>
 }
+type PreferenceRelaxationRequest = { job: GenerationJob; plan: RemediationPlan }
 type ReplacementProposal = {
   proposalId: string
   affectedMeals: string[]
@@ -150,6 +151,7 @@ export default function App() {
   const [editMeal, setEditMeal] = useState<Meal | null>(null)
   const [proposal, setProposal] = useState<ReplacementProposal | null>(null)
   const [pendingReplacement, setPendingReplacement] = useState<PendingReplacement | null>(null)
+  const [preferenceRelaxation, setPreferenceRelaxation] = useState<PreferenceRelaxationRequest | null>(null)
   const [creatingProfile, setCreatingProfile] = useState(false)
   const [editRequest, setEditRequest] = useState('No quiero brócoli en este plato')
   const [chatOpen, setChatOpen] = useState(false)
@@ -252,6 +254,7 @@ export default function App() {
             onSelectMeal={setSelectedMeal}
             onEditMeal={setEditMeal}
             onAction={postAction}
+            onRelaxPreferences={setPreferenceRelaxation}
           />
         )}
         {tab === 'recetas' && <RecipesScreen state={state} onAction={postAction} />}
@@ -355,6 +358,16 @@ export default function App() {
             }}>Solo este plato</button>
           </div>
         </Modal>
+      )}
+
+      {preferenceRelaxation && state.activeProfile && (
+        <PreferenceRelaxationModal
+          profile={state.activeProfile}
+          job={preferenceRelaxation.job}
+          plan={preferenceRelaxation.plan}
+          onAction={postAction}
+          onClose={() => setPreferenceRelaxation(null)}
+        />
       )}
 
       {creatingProfile && (
@@ -496,12 +509,26 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
   return embedded ? content : <main className="onboarding">{content}</main>
 }
 
-function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state: AppState; busy: string | null; onSelectMeal: (meal: Meal) => void; onEditMeal: (meal: Meal) => void; onAction: (payload: any) => Promise<any> }) {
+function WeekScreen({
+  state,
+  busy,
+  onSelectMeal,
+  onEditMeal,
+  onAction,
+  onRelaxPreferences,
+}: {
+  state: AppState
+  busy: string | null
+  onSelectMeal: (meal: Meal) => void
+  onEditMeal: (meal: Meal) => void
+  onAction: (payload: any) => Promise<any>
+  onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+}) {
   const menu = state.currentMenu
   if (!menu) {
     return (
       <div className="week-screen">
-        <GenerationJobsPanel jobs={state.generationJobs} profileId={state.activeProfile?.id} onAction={onAction} compact={false} />
+        <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} compact={false} />
         <EmptyState title="Sin menú" body="Cuando una generación termine correctamente, la semana aparecerá aquí." />
         {state.activeProfile?.latestTarget && (
           <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
@@ -527,7 +554,7 @@ function WeekScreen({ state, busy, onSelectMeal, onEditMeal, onAction }: { state
         <span>Confianza {menu.target.confidence}</span>
       </section>
       <GenerationNotice menu={menu} />
-      <GenerationJobsPanel jobs={state.generationJobs} profileId={state.activeProfile?.id} onAction={onAction} compact />
+      <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} compact />
       <div className="day-list">
         {menu.days.map((day) => (
           <section key={day.id} className="day-section">
@@ -638,7 +665,21 @@ function generationSummaryText(value: unknown): string | null {
   return summary || null
 }
 
-function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { jobs: GenerationJob[]; profileId?: string; onAction: (payload: any) => Promise<any>; compact?: boolean }) {
+function GenerationJobsPanel({
+  jobs,
+  profile,
+  profileId,
+  onAction,
+  onRelaxPreferences,
+  compact = false,
+}: {
+  jobs: GenerationJob[]
+  profile?: Profile | null
+  profileId?: string
+  onAction: (payload: any) => Promise<any>
+  onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+  compact?: boolean
+}) {
   const visibleJobs = jobs
     .filter((job) => job.status === 'failed' || job.status === 'running' || job.status === 'queued')
     .slice(0, compact ? 2 : 6)
@@ -661,9 +702,18 @@ function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { j
               <small>{jobFailureText(job)}</small>
               {generationSummaryText(job.result?.generationSummary) && <small>{generationSummaryText(job.result.generationSummary)}</small>}
               {job.logs.length > 0 && <small>Último paso: {job.logs[job.logs.length - 1]}</small>}
-              {job.remediation && <JobRemediation plan={job.remediation} compact={compact} />}
+              {job.remediation && (
+                <JobRemediation
+                  job={job}
+                  plan={job.remediation}
+                  profile={profile}
+                  compact={compact}
+                  onAction={onAction}
+                  onRelaxPreferences={onRelaxPreferences}
+                />
+              )}
             </div>
-            {job.status === 'failed' && (
+            {job.status === 'failed' && !job.remediation && (
               <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'retryGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
                 <RefreshCw /> Reintentar
               </button>
@@ -675,24 +725,142 @@ function GenerationJobsPanel({ jobs, profileId, onAction, compact = false }: { j
   )
 }
 
-function JobRemediation({ plan, compact }: { plan: RemediationPlan; compact: boolean }) {
+function JobRemediation({
+  job,
+  plan,
+  profile,
+  compact,
+  onAction,
+  onRelaxPreferences,
+}: {
+  job: GenerationJob
+  plan: RemediationPlan
+  profile?: Profile | null
+  compact: boolean
+  onAction: (payload: any) => Promise<any>
+  onRelaxPreferences: (request: PreferenceRelaxationRequest) => void
+}) {
+  const hasPreferencesToRelax = Boolean(profile && (profile.dislikes.length > 0 || profile.bannedFoods.length > 0))
   return (
     <div className={`job-remediation ${plan.severity}`}>
       <strong>{plan.title}</strong>
       <small>{plan.summary}</small>
       {!compact && (
-        <>
-          <ul>
-            {plan.steps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
-          </ul>
-          {plan.actions.length > 0 && (
-            <div className="remediation-actions">
-              {plan.actions.slice(0, 3).map((action) => <span key={`${action.kind}-${action.label}`}>{action.label}</span>)}
-            </div>
-          )}
-        </>
+        <ul>
+          {plan.steps.slice(0, 3).map((step) => <li key={step}>{step}</li>)}
+        </ul>
+      )}
+      {plan.actions.length > 0 && (
+        <div className="remediation-actions">
+          {plan.actions.slice(0, 3).map((action) => {
+            if (action.kind === 'retry_generation' && job.status === 'failed') {
+              return (
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onAction({ action: 'retryGenerationJob', profileId: profile?.id ?? job.profileId, jobId: job.id })}>
+                  {action.label}
+                </button>
+              )
+            }
+            if (action.kind === 'relax_preferences' && hasPreferencesToRelax) {
+              return (
+                <button key={`${action.kind}-${action.label}`} type="button" onClick={() => onRelaxPreferences({ job, plan })}>
+                  {action.label}
+                </button>
+              )
+            }
+            return <span key={`${action.kind}-${action.label}`}>{action.label}</span>
+          })}
+        </div>
       )}
     </div>
+  )
+}
+
+function PreferenceRelaxationModal({
+  profile,
+  job,
+  plan,
+  onAction,
+  onClose,
+}: {
+  profile: Profile
+  job: GenerationJob
+  plan: RemediationPlan
+  onAction: (payload: any) => Promise<any>
+  onClose: () => void
+}) {
+  const [removeDislikes, setRemoveDislikes] = useState<string[]>([])
+  const [removeBannedFoods, setRemoveBannedFoods] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [localBusy, setLocalBusy] = useState<string | null>(null)
+  const totalSelected = removeDislikes.length + removeBannedFoods.length
+
+  async function apply(retry: boolean) {
+    if (totalSelected === 0) {
+      setError('Selecciona al menos una preferencia para relajar.')
+      return
+    }
+    setError(null)
+    setLocalBusy(retry ? 'retry' : 'save')
+    try {
+      await onAction({
+        action: 'relaxProfilePreferences',
+        profileId: profile.id,
+        removeDislikes,
+        removeBannedFoods,
+      })
+      if (retry && job.status === 'failed') {
+        await onAction({ action: 'retryGenerationJob', profileId: profile.id, jobId: job.id })
+      }
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo aplicar la remediación.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
+
+  return (
+    <Modal title="Revisar preferencias" onClose={onClose}>
+      <div className="remediation-modal">
+        <p>{plan.summary}</p>
+        <PreferenceChecklist title="No me gusta" values={profile.dislikes} selected={removeDislikes} onChange={setRemoveDislikes} />
+        <PreferenceChecklist title="Prohibidos" values={profile.bannedFoods} selected={removeBannedFoods} onChange={setRemoveBannedFoods} />
+        {profile.dislikes.length === 0 && profile.bannedFoods.length === 0 && <p className="muted">Este perfil no tiene dislikes ni prohibidos para relajar.</p>}
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button className="secondary" type="button" disabled={localBusy !== null || totalSelected === 0} onClick={() => apply(false)}>
+            <Save size={16} /> {localBusy === 'save' ? 'Guardando...' : 'Guardar cambios'}
+          </button>
+          {job.status === 'failed' && (
+            <button className="primary" type="button" disabled={localBusy !== null || totalSelected === 0} onClick={() => apply(true)}>
+              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Reintentando...' : 'Guardar y reintentar'}
+            </button>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function PreferenceChecklist({ title, values, selected, onChange }: { title: string; values: string[]; selected: string[]; onChange: (values: string[]) => void }) {
+  if (values.length === 0) return null
+  return (
+    <fieldset className="preference-checklist">
+      <legend>{title}</legend>
+      {values.map((value) => {
+        const checked = selected.includes(value)
+        return (
+          <label key={value}>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(event) => onChange(event.target.checked ? [...selected, value] : selected.filter((item) => item !== value))}
+            />
+            <span>{value}</span>
+          </label>
+        )
+      })}
+    </fieldset>
   )
 }
 

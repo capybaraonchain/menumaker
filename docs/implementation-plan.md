@@ -212,6 +212,7 @@ Implement:
 - Job logs.
 - Code-specific remediation metadata persisted in `generation_jobs.result.remediation` for failed jobs.
 - Repair-issue remediation metadata persisted in menu/job generation settings when bounded repair cannot fully resolve the week.
+- Guided profile-preference relaxation through the shared app action registry.
 - Retry limit.
 - Failure states.
 - AI cache keyed by input hash, model, and schema version.

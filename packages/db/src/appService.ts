@@ -173,6 +173,13 @@ export interface RetryGenerationJobResult {
   menu: WeeklyMenuView
 }
 
+export interface RelaxProfilePreferencesResult {
+  profileId: string
+  removedDislikes: string[]
+  removedBannedFoods: string[]
+  profile: ProfileRow
+}
+
 export interface ChatCommandPlanningInput {
   message: string
   locale: Locale
@@ -549,6 +556,37 @@ export async function updateProfile(profileId: string, input: ProfileUpdateInput
   `
   await saveMacroTarget(profileId, targets)
   return getAppState(profileId)
+}
+
+export async function relaxProfilePreferences(
+  profileId: string,
+  removeDislikes: string[],
+  removeBannedFoods: string[],
+): Promise<RelaxProfilePreferencesResult> {
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  const removedDislikes = selectedExistingValues(profile.dislikes, removeDislikes)
+  const removedBannedFoods = selectedExistingValues(profile.bannedFoods, removeBannedFoods)
+  if (removedDislikes.length === 0 && removedBannedFoods.length === 0) {
+    throw new Error('Selecciona al menos una preferencia para relajar.')
+  }
+  const nextDislikes = removeSelectedValues(profile.dislikes, removedDislikes)
+  const nextBannedFoods = removeSelectedValues(profile.bannedFoods, removedBannedFoods)
+  const sql = sqlClient()
+  await sql`
+    update profiles
+    set dislikes = ${sql.json(nextDislikes as any)},
+      banned_foods = ${sql.json(nextBannedFoods as any)}
+    where id = ${profileId} and user_id = ${localUserId()}
+  `
+  const updated = (await listProfiles()).find((item) => item.id === profileId)
+  if (!updated) throw new Error('Perfil no encontrado después de actualizar preferencias.')
+  return {
+    profileId,
+    removedDislikes,
+    removedBannedFoods,
+    profile: updated,
+  }
 }
 
 export async function planChatCommandCached(input: ChatCommandPlanningInput): Promise<CachedPlannedChatCommand | null> {
@@ -3215,6 +3253,16 @@ function round(value: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+function selectedExistingValues(existing: string[], selected: string[]): string[] {
+  const selectedKeys = new Set(selected.map(normalizeIngredientName).filter(Boolean))
+  return existing.filter((item) => selectedKeys.has(normalizeIngredientName(item)))
+}
+
+function removeSelectedValues(existing: string[], selected: string[]): string[] {
+  const selectedKeys = new Set(selected.map(normalizeIngredientName).filter(Boolean))
+  return existing.filter((item) => !selectedKeys.has(normalizeIngredientName(item)))
 }
 
 function unique(values: string[]): string[] {

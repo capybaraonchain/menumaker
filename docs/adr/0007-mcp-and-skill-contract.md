@@ -85,6 +85,7 @@ Mutation tools:
 - `star_recipe`
 - `unstar_recipe`
 - `save_profile_preference`
+- `relax_profile_preferences`
 - `apply_calorie_target_change`
 - `delete_profile`
 - `retry_generation_job`
@@ -202,6 +203,7 @@ The companion skill should instruct agents to:
 - Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
 - Use persisted `generationSummary`, `remediation`, `repairRemediation`, and `RepairRequest` / `RepairResult` telemetry from generation job results when explaining what changed, why a generation failed, and what the next safe action is.
 - Use `retry_generation_job` only for failed generation jobs and only after explicit confirmation.
+- Use `relax_profile_preferences` only when the user explicitly chooses which dislikes or banned foods to remove.
 - Explain impossible targets by showing the calorie conflict between protein, minimum fat, and calorie target.
 - Preview calorie target changes with `preview_calorie_adjustment_plan` before mutation.
 - Explain whether a calorie adjustment changed portions, rebalanced ingredients, or replaced recipes.

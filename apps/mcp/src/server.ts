@@ -55,6 +55,7 @@ const pendingActionNames = [
   'applySimilarReplacements',
   'deleteProfile',
   'retryGenerationJob',
+  'relaxProfilePreferences',
   'startWeeklyMenuGeneration',
   'runGenerationJob',
 ] as const
@@ -263,6 +264,24 @@ server.registerTool(
   async ({ profileId, jobId, confirmed }) => {
     requireConfirmation(confirmed, 'retry generation job')
     return json(await executeAppAction('retryGenerationJob', { profileId, jobId }, 'mcp'))
+  },
+)
+
+server.registerTool(
+  'relax_profile_preferences',
+  {
+    description: 'Mutation: remove selected dislikes or banned foods from a profile as a guided remediation step. Requires confirmed=true.',
+    inputSchema: {
+      profileId: z.string().uuid(),
+      removeDislikes: z.array(z.string()).default([]),
+      removeBannedFoods: z.array(z.string()).default([]),
+      confirmed: z.boolean(),
+    },
+    annotations: { readOnlyHint: false, openWorldHint: false },
+  },
+  async ({ profileId, removeDislikes, removeBannedFoods, confirmed }) => {
+    requireConfirmation(confirmed, 'relax profile preferences')
+    return json(await executeAppAction('relaxProfilePreferences', { profileId, removeDislikes, removeBannedFoods }, 'mcp'))
   },
 )
 
