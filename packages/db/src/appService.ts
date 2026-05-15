@@ -664,8 +664,7 @@ export async function createProfileAndFirstMenu(input: OnboardingInput): Promise
 }
 
 export async function updateProfile(profileId: string, input: ProfileUpdateInput): Promise<AppState> {
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   const next = { ...profile, ...input }
   const targets = calculateMacroTargets({
     weightKg: next.weightKg,
@@ -709,8 +708,7 @@ export async function relaxProfilePreferences(
   removeDislikes: string[],
   removeBannedFoods: string[],
 ): Promise<RelaxProfilePreferencesResult> {
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   const removedDislikes = selectedExistingValues(profile.dislikes, removeDislikes)
   const removedBannedFoods = selectedExistingValues(profile.bannedFoods, removeBannedFoods)
   if (removedDislikes.length === 0 && removedBannedFoods.length === 0) {
@@ -803,8 +801,7 @@ export async function saveIngredientMapping(
   ingredientName: string,
   canonicalFoodName: string,
 ): Promise<IngredientMappingView> {
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  await getOwnedProfile(profileId)
   const normalizedIngredient = normalizeIngredientName(ingredientName)
   if (normalizedIngredient.length < 2) throw new Error('Escribe el ingrediente que quieres mapear.')
   const food = await resolveMappableFood(canonicalFoodName)
@@ -827,8 +824,7 @@ export async function saveIngredientMapping(
 
 export async function createUserNutritionFood(input: UserNutritionFoodInput): Promise<{ record: NutritionSourceRecord; food: MappableFoodView; state: AppState }> {
   if (input.profileId) {
-    const profile = (await listProfiles()).find((item) => item.id === input.profileId)
-    if (!profile) throw new Error('Perfil no encontrado.')
+    await getOwnedProfile(input.profileId)
   }
   const canonicalName = input.canonicalName.trim()
   if (canonicalName.length < 2) throw new Error('Escribe un nombre de alimento válido.')
@@ -963,8 +959,7 @@ export async function summarizeGenerationCached(input: GenerationSummaryInput): 
 }
 
 export async function exportProfileData(profileId: string): Promise<ProfileDeletionExport> {
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   const sql = sqlClient()
   const menuRows = await sql`
     select id from weekly_menus
@@ -1020,8 +1015,7 @@ export async function exportProfileData(profileId: string): Promise<ProfileDelet
 }
 
 export async function deleteProfile(profileId: string, expectedName: string, exportBeforeDelete = true): Promise<ProfileDeletionResult> {
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   if (expectedName.trim() !== profile.name) {
     throw new Error(`Para eliminar este perfil, escribe exactamente "${profile.name}".`)
   }
@@ -1188,7 +1182,14 @@ export async function listProfiles(): Promise<ProfileRow[]> {
   return rows.map((row) => profileFromRow(row))
 }
 
+export async function getOwnedProfile(profileId: string): Promise<ProfileRow> {
+  const profile = (await listProfiles()).find((item) => item.id === profileId)
+  if (!profile) throw new Error('Perfil no encontrado.')
+  return profile
+}
+
 export async function saveMacroTarget(profileId: string, targets: MacroTargets): Promise<string> {
+  await getOwnedProfile(profileId)
   const sql = sqlClient()
   const [row] = await sql<[{ id: string }]>`
     insert into macro_targets (
@@ -1214,8 +1215,7 @@ export async function updateMacroTargetAndGenerate(profileId: string, input: Mac
   menu?: WeeklyMenuView
 }> {
   const sql = sqlClient()
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   if (!profile.latestTarget) throw new Error('El perfil no tiene un objetivo base para editar.')
   const target = editedMacroTarget(profile.latestTarget, input)
   const targetId = await saveMacroTarget(profileId, target)
@@ -1241,8 +1241,7 @@ export async function createWeeklyMenu(profileId: string, targetId?: string, tar
 
 export async function enqueueWeeklyMenuGenerationJob(profileId: string, targetId?: string, targets?: MacroTargets, kind = 'weekly_generation'): Promise<GenerationJobView> {
   const sql = sqlClient()
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
+  const profile = await getOwnedProfile(profileId)
   const target = targets ?? profile.latestTarget
   if (!target) throw new Error('El perfil no tiene objetivos de macros.')
   const macroTargetId = targetId ?? (await saveMacroTarget(profileId, target))
@@ -1863,6 +1862,7 @@ export async function previewRegenerateWeekPlan(menuId: string): Promise<Regener
 }
 
 export async function previewCalorieAdjustmentPlan(profileId: string, calories: number): Promise<CalorieAdjustmentPlan> {
+  const profile = await getOwnedProfile(profileId)
   const current = await getCurrentMenu(profileId)
   if (!current) throw new Error('Menú no encontrado.')
   if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
@@ -1872,8 +1872,6 @@ export async function previewCalorieAdjustmentPlan(profileId: string, calories: 
   const target = retargetCalories(current.target, Math.round(calories))
   const conflict = impossibleTargetConflict(target)
   if (conflict.impossible) throw new Error(conflict.messageEs)
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
   const nutritionCatalog = await nutritionCatalogForScoring()
   const savedRecipeIds = (await getSavedRecipes(profileId)).map((item) => item.recipe.id)
   const replacementCandidatesBySlot: Partial<Record<MealSlot, RecipeCandidate[]>> = {}
@@ -1911,6 +1909,7 @@ export async function adjustCaloriesAndRegenerateWeek(profileId: string, calorie
 }
 
 export async function applyCalorieAdjustmentPlan(profileId: string, calories: number, plan?: CalorieAdjustmentPlan): Promise<AppliedCalorieAdjustmentResult> {
+  const profile = await getOwnedProfile(profileId)
   const current = await getCurrentMenu(profileId)
   if (!current) throw new Error('Menú no encontrado.')
   if (!Number.isFinite(calories) || calories < 900 || calories > 5000) {
@@ -1928,9 +1927,6 @@ export async function applyCalorieAdjustmentPlan(profileId: string, calories: nu
   if (resolvedPlan.baseMenuId !== current.id || resolvedPlan.baseMenuHash !== currentMenuHash(toPlannerMenu(current))) {
     throw new Error('El menú cambió desde que preparé el reajuste. Vuelve a pedir el cambio para generar un plan actualizado.')
   }
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) throw new Error('Perfil no encontrado.')
-
   const targetId = await saveMacroTarget(profileId, target)
   const menu = await createWeeklyMenuFromCalorieAdjustmentPlan(profile, targetId, target, resolvedPlan)
   return {
@@ -2114,13 +2110,12 @@ export async function applySimilarIngredientReplacements(
 }
 
 export async function saveProfilePreference(profileId: string, value: string, kind = 'dislike', scope = 'profile'): Promise<void> {
+  const profile = await getOwnedProfile(profileId)
   const sql = sqlClient()
   await sql`
     insert into profile_preferences (user_id, profile_id, scope, kind, value, strength)
     values (${localUserId()}, ${profileId}, ${scope}, ${kind}, ${value}, 'confirmed')
   `
-  const profile = (await listProfiles()).find((item) => item.id === profileId)
-  if (!profile) return
   const likes = unique(kind === 'like' ? [...profile.likes, value] : profile.likes)
   const dislikes = unique(kind === 'dislike' || kind === 'ban' ? [...profile.dislikes, value] : profile.dislikes)
   const bannedFoods = unique(kind === 'ban' ? [...profile.bannedFoods, value] : profile.bannedFoods)
@@ -2135,6 +2130,7 @@ export async function saveProfilePreference(profileId: string, value: string, ki
 }
 
 export async function starRecipe(profileId: string, recipeId: string): Promise<void> {
+  await getOwnedProfile(profileId)
   const sql = sqlClient()
   await sql`
     insert into saved_recipes (user_id, profile_id, recipe_id)

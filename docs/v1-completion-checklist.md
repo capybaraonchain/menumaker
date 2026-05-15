@@ -18,6 +18,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] A single local user stub is used while preserving `user_id` ownership fields.
 - [x] Generated outputs and AI cache rows are user-scoped for hosted sync/RLS compatibility.
 - [x] Schema ownership regression tests guard user-owned tables before hosted sync exists.
+- [x] High-risk profile-scoped mutations assert profile ownership through a shared local-user guard before writing.
 
 ## 2. Monorepo And Tooling
 

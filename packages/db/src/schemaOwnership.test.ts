@@ -33,6 +33,34 @@ test('hosted-sync owned tables include direct user_id columns', () => {
   }
 })
 
+test('profile-scoped mutations use shared ownership guard', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const guardedFunctions = [
+    'updateProfile',
+    'relaxProfilePreferences',
+    'saveIngredientMapping',
+    'exportProfileData',
+    'deleteProfile',
+    'saveMacroTarget',
+    'updateMacroTargetAndGenerate',
+    'enqueueWeeklyMenuGenerationJob',
+    'previewCalorieAdjustmentPlan',
+    'applyCalorieAdjustmentPlan',
+    'saveProfilePreference',
+    'starRecipe',
+  ]
+
+  assert.match(appService, /export async function getOwnedProfile\(profileId: string\): Promise<ProfileRow>/)
+  assert.match(appService, /where p\.user_id = \$\{localUserId\(\)\}/)
+  for (const fn of guardedFunctions) {
+    const start = appService.indexOf(`export async function ${fn}`)
+    assert.notEqual(start, -1, `${fn} must exist`)
+    const next = appService.indexOf('\nexport async function ', start + 1)
+    const body = appService.slice(start, next === -1 ? undefined : next)
+    assert.match(body, /getOwnedProfile\(profileId\)/, `${fn} must assert local-user profile ownership`)
+  }
+})
+
 test('ai cache is scoped by user in migration and service queries', () => {
   const migration = readFileSync(resolve(root, 'packages/db/src/migrate.ts'), 'utf8')
   const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')

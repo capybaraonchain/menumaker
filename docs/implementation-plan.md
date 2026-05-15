@@ -98,6 +98,7 @@ Acceptance:
 - User-owned rows include ownership fields compatible with hosted sync later.
 - Generated-output tables, including AI cache, are scoped by `user_id`.
 - Schema ownership tests prevent adding user-owned tables without direct local ownership coverage.
+- High-risk profile-scoped mutations use a shared local-user ownership guard before writing, so hosted auth/RLS can replace the local stub without changing every service boundary.
 - Nutrition source tables have idempotent `(food_id, source_id)` records and can be populated through `npm --workspace @menumaker/db run nutrition:import -- ./foods.json`.
 - Open Food Facts barcode products can be fetched and imported with `npm --workspace @menumaker/db run nutrition:import:off -- <barcode>`.
 - USDA FoodData Central downloadable JSON datasets can be imported without an API key with `npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json`.
