@@ -261,6 +261,7 @@ Acceptance:
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and queue a retry job after confirmation.
 - `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.
 - Semana offers `Encolar semana` as the enqueue-first generation path and keeps direct `Generar ahora` / queued-job `Ejecutar ahora` controls as explicit local fallback controls.
+- Visible regenerate meal/day/week controls create queued preview jobs first; completed preview jobs expose `Aplicar plan`, and regenerate mutations reject requests without the stored server-owned plan.
 - `processQueuedGenerationJobs` exposes one local worker drain pass through the app action registry, API, MCP, and Semana `Procesar cola` control.
 
 ## Phase 6: Weekly Menu Planning Pipeline

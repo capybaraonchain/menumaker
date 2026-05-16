@@ -619,7 +619,7 @@ function WeekScreen({
           <h2>{Math.round(menu.nutrition.calories / 7)} kcal/día</h2>
           <p>{Math.round(menu.nutrition.proteinG / 7)}g proteína · {Math.round(menu.nutrition.carbsG / 7)}g carbos · {Math.round(menu.nutrition.fatG / 7)}g grasa</p>
         </div>
-        <button className="secondary" disabled={busy === 'regenerateWeek'} onClick={() => onAction({ action: 'regenerateWeek', menuId: menu.id, profileId: state.activeProfile?.id })}><RefreshCw /> Regenerar</button>
+        <button className="secondary" disabled={busy === 'enqueuePreviewGenerationJob'} onClick={() => onAction({ action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_week', menuId: menu.id, profileId: state.activeProfile?.id })}><RefreshCw /> Previsualizar</button>
       </section>
       <section className="target-strip">
         <span>Objetivo: {menu.target.calories} kcal</span>
@@ -635,7 +635,7 @@ function WeekScreen({
               <h3>{dayNames[day.dayIndex]}</h3>
               <div>
                 <button className="icon-button" onClick={() => onAction({ action: 'lockDay', dayPlanId: day.id, locked: !day.locked, profileId: state.activeProfile?.id })}>{day.locked ? <Lock /> : <Unlock />}</button>
-                <button className="icon-button" onClick={() => onAction({ action: 'regenerateDay', dayPlanId: day.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
+                <button className="icon-button" onClick={() => onAction({ action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_day', dayPlanId: day.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
               </div>
             </div>
             <div className="meal-list">
@@ -649,7 +649,7 @@ function WeekScreen({
                   <div className="row-actions">
                     <button className="icon-button" onClick={() => onAction({ action: 'lockMeal', menuMealId: meal.id, locked: !meal.locked, profileId: state.activeProfile?.id })}>{meal.locked ? <Lock /> : <Unlock />}</button>
                     <button className="icon-button" onClick={() => onEditMeal(meal)}><Sparkles /></button>
-                    <button className="icon-button" onClick={() => onAction({ action: 'regenerateMeal', menuMealId: meal.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
+                    <button className="icon-button" onClick={() => onAction({ action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_meal', menuMealId: meal.id, profileId: state.activeProfile?.id })}><RefreshCw /></button>
                   </div>
                 </article>
               ))}
@@ -760,18 +760,18 @@ function repairActionPayload(plan: RemediationPlan, menu: NonNullable<AppState['
   const action = plan.actions.find((item) => item.kind === 'regenerate_meal' || item.kind === 'regenerate_day' || item.kind === 'regenerate_week')
   if (!action) return null
   if (action.kind === 'regenerate_week') {
-    return { label: action.label, payload: { action: 'regenerateWeek', menuId: menu.id, profileId } }
+    return { label: action.label, payload: { action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_week', menuId: menu.id, profileId } }
   }
   const dayIndex = typeof plan.context?.dayIndex === 'number' ? plan.context.dayIndex : null
   const day = dayIndex === null ? null : menu.days.find((item) => item.dayIndex === dayIndex)
-  if (!day) return { label: 'Regenerar semana', payload: { action: 'regenerateWeek', menuId: menu.id, profileId } }
+  if (!day) return { label: 'Regenerar semana', payload: { action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_week', menuId: menu.id, profileId } }
   if (action.kind === 'regenerate_day') {
-    return { label: action.label, payload: { action: 'regenerateDay', dayPlanId: day.id, profileId } }
+    return { label: action.label, payload: { action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_day', dayPlanId: day.id, profileId } }
   }
   const slot = typeof plan.context?.slot === 'string' ? plan.context.slot : null
   const meal = slot ? day.meals.find((item) => item.slot === slot) : null
-  if (!meal) return { label: 'Regenerar día', payload: { action: 'regenerateDay', dayPlanId: day.id, profileId } }
-  return { label: action.label, payload: { action: 'regenerateMeal', menuMealId: meal.id, profileId } }
+  if (!meal) return { label: 'Regenerar día', payload: { action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_day', dayPlanId: day.id, profileId } }
+  return { label: action.label, payload: { action: 'enqueuePreviewGenerationJob', kind: 'preview_regenerate_meal', menuMealId: meal.id, profileId } }
 }
 
 function generationSummaryText(value: unknown): string | null {
@@ -802,7 +802,7 @@ function GenerationJobsPanel({
   compact?: boolean
 }) {
   const visibleJobs = jobs
-    .filter((job) => job.status === 'failed' || job.status === 'running' || job.status === 'queued')
+    .filter((job) => job.status === 'failed' || job.status === 'running' || job.status === 'queued' || hasCompletedPreviewPlan(job))
     .slice(0, compact ? 2 : 6)
   const queuedJobs = visibleJobs.filter((job) => job.status === 'queued')
   if (visibleJobs.length === 0) return null
@@ -851,7 +851,7 @@ function GenerationJobsPanel({
             {(job.status === 'queued' || job.status === 'running') && (
               <div className="job-actions">
                 {job.status === 'queued' && (
-                  <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction({ action: 'runGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id })}>
+                  <button className="secondary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction(runQueuedJobAction(job, profileId))}>
                     <RefreshCw /> Ejecutar ahora
                   </button>
                 )}
@@ -860,11 +860,51 @@ function GenerationJobsPanel({
                 </button>
               </div>
             )}
+            {hasCompletedPreviewPlan(job) && previewApplyAction(job, profileId) && (
+              <div className="job-actions">
+                <button className="primary" disabled={!(profileId ?? job.profileId)} onClick={() => onAction(previewApplyAction(job, profileId))}>
+                  <Sparkles /> Aplicar plan
+                </button>
+              </div>
+            )}
           </article>
         ))}
       </div>
     </section>
   )
+}
+
+function isPreviewJob(job: GenerationJob): boolean {
+  return job.kind.startsWith('preview_')
+}
+
+function hasCompletedPreviewPlan(job: GenerationJob): boolean {
+  return isPreviewJob(job) && job.status === 'completed' && Boolean(job.result?.plan && job.result?.previewInput)
+}
+
+function runQueuedJobAction(job: GenerationJob, profileId?: string): Record<string, unknown> {
+  return isPreviewJob(job)
+    ? { action: 'runPreviewGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id }
+    : { action: 'runGenerationJob', profileId: profileId ?? job.profileId, jobId: job.id }
+}
+
+function previewApplyAction(job: GenerationJob, profileId?: string): Record<string, unknown> | null {
+  const input = job.result?.previewInput
+  const plan = job.result?.plan
+  if (!input || !plan || typeof input !== 'object') return null
+  if (input.kind === 'preview_regenerate_week' && typeof input.menuId === 'string') {
+    return { action: 'regenerateWeek', profileId: profileId ?? job.profileId, menuId: input.menuId, plan }
+  }
+  if (input.kind === 'preview_regenerate_day' && typeof input.dayPlanId === 'string') {
+    return { action: 'regenerateDay', profileId: profileId ?? job.profileId, dayPlanId: input.dayPlanId, plan }
+  }
+  if (input.kind === 'preview_regenerate_meal' && typeof input.menuMealId === 'string') {
+    return { action: 'regenerateMeal', profileId: profileId ?? job.profileId, menuMealId: input.menuMealId, plan }
+  }
+  if (input.kind === 'preview_calorie_adjustment' && typeof input.profileId === 'string' && typeof input.calories === 'number') {
+    return { action: 'applyCalorieTargetChange', profileId: input.profileId, calories: input.calories, plan }
+  }
+  return null
 }
 
 function JobRemediation({

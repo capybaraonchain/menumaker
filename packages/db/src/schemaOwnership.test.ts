@@ -207,9 +207,30 @@ test('queued generation jobs have a local worker entrypoint', () => {
   assert.match(webPage, /Encolar semana/)
   assert.match(webPage, /runNow: false/)
   assert.match(webPage, /Ejecutar ahora/)
+  assert.match(webPage, /runPreviewGenerationJob/)
   assert.match(webPage, /Procesar cola/)
   assert.match(dbPackage, /"worker:generation": "tsx src\/generationWorker\.ts"/)
   assert.match(rootPackage, /"worker:generation": "npm --workspace @menumaker\/db run worker:generation"/)
+})
+
+test('visible regeneration controls create server-owned preview jobs before mutation', () => {
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const webPage = readFileSync(resolve(root, 'apps/web/app/page.tsx'), 'utf8')
+
+  for (const actionName of ['regenerateWeek', 'regenerateDay', 'regenerateMeal']) {
+    const start = appActions.indexOf(`${actionName}: {`)
+    assert.notEqual(start, -1, `${actionName} action must exist`)
+    const next = appActions.indexOf('\n  },', start + 1)
+    const body = appActions.slice(start, next === -1 ? undefined : next)
+    assert.match(body, /Esta regeneración necesita una previsualización server-owned antes de aplicarse/)
+    assert.doesNotMatch(body, /await previewRegenerate/)
+  }
+
+  assert.match(webPage, /kind: 'preview_regenerate_week'/)
+  assert.match(webPage, /kind: 'preview_regenerate_day'/)
+  assert.match(webPage, /kind: 'preview_regenerate_meal'/)
+  assert.match(webPage, /hasCompletedPreviewPlan\(job\)/)
+  assert.match(webPage, /Aplicar plan/)
 })
 
 test('failed generation retry is enqueue-first instead of request-time execution', () => {

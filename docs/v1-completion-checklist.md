@@ -211,7 +211,7 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation can still execute inside requests for explicit “run now” controls, but weekly generation, failed-job retry, target-remediation generation, and long preview flows are job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves it to running and completed/failed/cancelled. A local worker command can process queued weekly or preview jobs outside the web request. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full hosted worker queues and streaming progress remain deferred.
+Local v1 generation can still execute inside requests for explicit “run now” controls, but weekly generation, failed-job retry, target-remediation generation, regeneration previews, and long preview flows are job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves it to running and completed/failed/cancelled. Regeneration mutations require a server-owned preview plan and reject direct mutation requests without one. A local worker command can process queued weekly or preview jobs outside the web request. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full hosted worker queues and streaming progress remain deferred.
 
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
@@ -224,6 +224,8 @@ Local v1 generation can still execute inside requests for explicit “run now”
 - [x] MCP exposes enqueue and run tools for weekly generation jobs.
 - [x] Regeneration and calorie preview plans can be queued and executed through shared app actions.
 - [x] MCP exposes enqueue and run tools for preview generation jobs.
+- [x] Visible regeneration controls enqueue server-owned preview jobs before any menu mutation.
+- [x] Completed preview jobs can apply the exact stored plan from the job result.
 - [x] Queued/running generation and preview jobs can be cancelled from the app action registry, web UI, and MCP.
 - [x] Semana shows failed/running jobs instead of hiding them in database logs.
 - [x] Historial shows generation jobs alongside stored menus.
@@ -243,7 +245,7 @@ Local v1 generation can still execute inside requests for explicit “run now”
 - [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes by queueing a retry job.
 - [x] Guided fallback-policy remediation can enable recipe/skeleton fallback and retry failed generation after confirmation by queueing a retry job.
 - [x] Guided target-editing remediation can save revised macro targets and queue a new week through typed actions, with immediate execution as an explicit opt-in.
-- [x] Repair-specific regeneration actions are available from persisted repair notices.
+- [x] Repair-specific regeneration preview actions are available from persisted repair notices.
 
 ## 13. In-App Chat
 

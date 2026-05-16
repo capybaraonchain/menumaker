@@ -346,7 +346,9 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     confirmationCopyEs: regenerationConfirmation,
     successCopyEs: (_, result) => ['Listo. Apliqué la regeneración semanal respetando días y comidas bloqueadas.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      const applied = await applyRegenerationPlan(regenerationPlanFromInput(input) ?? await previewRegenerateWeekPlan(input.menuId))
+      const plan = regenerationPlanFromInput(input)
+      if (!plan) throw new Error('Esta regeneración necesita una previsualización server-owned antes de aplicarse.')
+      const applied = await applyRegenerationPlan(plan)
       return {
         state: await appStateResult(input.profileId ?? applied.plan.profileId),
         menu: applied.menu,
@@ -363,7 +365,9 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     confirmationCopyEs: regenerationConfirmation,
     successCopyEs: (_, result) => ['Listo. Apliqué la regeneración del día respetando las comidas bloqueadas.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      const applied = await applyRegenerationPlan(regenerationPlanFromInput(input) ?? await previewRegenerateDayPlan(input.dayPlanId))
+      const plan = regenerationPlanFromInput(input)
+      if (!plan) throw new Error('Esta regeneración necesita una previsualización server-owned antes de aplicarse.')
+      const applied = await applyRegenerationPlan(plan)
       return {
         state: await appStateResult(input.profileId ?? applied.plan.profileId),
         menu: applied.menu,
@@ -380,7 +384,9 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     confirmationCopyEs: regenerationConfirmation,
     successCopyEs: (_, result) => ['Listo. Apliqué la regeneración de la comida seleccionada.', resultChangeSummary(result)].filter(Boolean).join('\n\n'),
     async execute(input) {
-      const applied = await applyRegenerationPlan(regenerationPlanFromInput(input) ?? await previewRegenerateMealPlan(input.menuMealId))
+      const plan = regenerationPlanFromInput(input)
+      if (!plan) throw new Error('Esta regeneración necesita una previsualización server-owned antes de aplicarse.')
+      const applied = await applyRegenerationPlan(plan)
       return {
         state: await appStateResult(input.profileId ?? applied.plan.profileId),
         menu: applied.menu,

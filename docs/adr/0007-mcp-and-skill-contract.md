@@ -208,6 +208,7 @@ The companion skill should instruct agents to:
 - Use `enqueue_weekly_menu_generation` when an external agent should create a queued job without blocking on the full planner.
 - Use `run_generation_job` to execute a queued weekly-generation job after confirmation.
 - Use `enqueue_preview_generation_job` and `run_preview_generation_job` when a regeneration or calorie-adjustment preview may take long enough that the agent should persist progress and the exact plan before asking for confirmation.
+- Regeneration mutations require the server-owned preview plan. Do not call `regenerate_meal`, `regenerate_day`, or `regenerate_week` without a plan from a synchronous preview response or a completed preview job.
 - Use `cancel_generation_job` when the user wants to stop a queued or running generation/preview job.
 - Use `start_weekly_menu_generation` only when the user explicitly wants enqueue-and-run in one step.
 - Use `get_generation_jobs` when a user asks what happened during generation, whether a menu is still running, why generation failed, or what can be retried.
