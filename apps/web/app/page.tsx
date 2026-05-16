@@ -1091,8 +1091,13 @@ function IngredientMappingModal({
   const [ingredientName, setIngredientName] = useState(ingredientNameFromRemediation(plan, job))
   const [canonicalFoodName, setCanonicalFoodName] = useState(foods[0]?.name ?? '')
   const [searchQuery, setSearchQuery] = useState(ingredientNameFromRemediation(plan, job))
+  const [sourceFilter, setSourceFilter] = useState('')
   const [searchResults, setSearchResults] = useState<MappableFood[]>([])
   const [showCreateFood, setShowCreateFood] = useState(false)
+  const [barcode, setBarcode] = useState('')
+  const [usdaPath, setUsdaPath] = useState('')
+  const [usdaFdcIds, setUsdaFdcIds] = useState('')
+  const [usdaLimit, setUsdaLimit] = useState('')
   const [customName, setCustomName] = useState(ingredientNameFromRemediation(plan, job))
   const [customCategory, setCustomCategory] = useState('custom')
   const [customCalories, setCustomCalories] = useState('')
@@ -1101,11 +1106,13 @@ function IngredientMappingModal({
   const [customFat, setCustomFat] = useState('')
   const [customFiber, setCustomFiber] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [sourceMessage, setSourceMessage] = useState<string | null>(null)
   const [localBusy, setLocalBusy] = useState<string | null>(null)
   const currentOptions = searchResults.length > 0 ? searchResults : foods.slice(0, 25)
+  const sourceOptions = Array.from(new Set(foods.flatMap((food) => food.sources ?? []))).sort()
 
-  async function searchFoods() {
-    const query = searchQuery.trim() || ingredientName.trim()
+  async function searchFoods(nextSourceFilter = sourceFilter, nextQuery?: string) {
+    const query = nextQuery?.trim() || searchQuery.trim() || ingredientName.trim()
     if (query.length < 2) {
       setError('Escribe al menos 2 letras para buscar en las fuentes nutricionales.')
       return
@@ -1118,6 +1125,7 @@ function IngredientMappingModal({
         profileId: profile.id,
         query,
         limit: 12,
+        source: nextSourceFilter || undefined,
       }) as { foods?: MappableFood[] }
       const nextResults = result.foods ?? []
       setSearchResults(nextResults)
@@ -1125,6 +1133,58 @@ function IngredientMappingModal({
       if (nextResults.length === 0) setError('No encontré alimentos determinísticos para esa búsqueda. Importa una fuente o crea un alimento local.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo buscar en fuentes nutricionales.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
+
+  async function importBarcodeProduct() {
+    if (!/^\d{6,14}$/.test(barcode)) {
+      setError('Escribe un código de barras válido.')
+      return
+    }
+    setError(null)
+    setSourceMessage(null)
+    setLocalBusy('off')
+    try {
+      await onAction({ action: 'importOpenFoodFactsProduct', profileId: profile.id, barcode })
+      setSourceMessage('Producto importado desde Open Food Facts. Busca el nombre o código para seleccionarlo.')
+      setSourceFilter('openfoodfacts')
+      const nextQuery = ingredientName.trim() || barcode
+      setSearchQuery(nextQuery)
+      setBarcode('')
+      await searchFoods('openfoodfacts', nextQuery)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo importar desde Open Food Facts.')
+    } finally {
+      setLocalBusy(null)
+    }
+  }
+
+  async function importUsdaDownload() {
+    if (!usdaPath.trim()) {
+      setError('Escribe la ruta local del JSON descargado de USDA.')
+      return
+    }
+    setError(null)
+    setSourceMessage(null)
+    setLocalBusy('usda')
+    try {
+      await onAction({
+        action: 'importUsdaFoodDataCentralDownload',
+        profileId: profile.id,
+        path: usdaPath.trim(),
+        fdcIds: parsePositiveIntegers(usdaFdcIds),
+        limit: usdaLimit.trim() ? Number(usdaLimit) : undefined,
+      })
+      setSourceMessage('Dataset USDA importado. Busca el alimento en las fuentes USDA.')
+      setSourceFilter('usda_fdc')
+      setUsdaPath('')
+      setUsdaFdcIds('')
+      setUsdaLimit('')
+      await searchFoods('usda_fdc')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se pudo importar el dataset USDA.')
     } finally {
       setLocalBusy(null)
     }
@@ -1213,7 +1273,11 @@ function IngredientMappingModal({
           Buscar alimento determinístico
           <div className="inline-field">
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="skyr, arroz, salmon..." />
-            <button className="secondary icon-button-text" type="button" disabled={localBusy !== null} onClick={searchFoods}>
+            <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} aria-label="Fuente nutricional">
+              <option value="">Todas</option>
+              {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+            </select>
+            <button className="secondary icon-button-text" type="button" disabled={localBusy !== null} onClick={() => searchFoods()}>
               <Search size={16} /> {localBusy === 'search' ? 'Buscando...' : 'Buscar'}
             </button>
           </div>
@@ -1242,6 +1306,23 @@ function IngredientMappingModal({
             ))}
           </div>
         )}
+        <details className="inline-source-create">
+          <summary>Importar fuente ahora</summary>
+          <div className="source-form">
+            <label>Código Open Food Facts<input value={barcode} inputMode="numeric" placeholder="3017620422003" onChange={(event) => setBarcode(event.target.value)} /></label>
+            <button className="secondary" type="button" disabled={localBusy !== null || !/^\d{6,14}$/.test(barcode)} onClick={importBarcodeProduct}>
+              <Save size={16} /> {localBusy === 'off' ? 'Importando...' : 'Importar producto'}
+            </button>
+            <label>Ruta JSON local USDA<input value={usdaPath} placeholder="/Users/.../FoodData_Central_foundation_food_json_2026-04-30.json" onChange={(event) => setUsdaPath(event.target.value)} /></label>
+            <div className="source-grid">
+              <label>FDC IDs opcionales<input value={usdaFdcIds} placeholder="321358, 170379" onChange={(event) => setUsdaFdcIds(event.target.value)} /></label>
+              <label>Límite opcional<input value={usdaLimit} inputMode="numeric" placeholder="1000" onChange={(event) => setUsdaLimit(event.target.value)} /></label>
+            </div>
+            <button className="secondary" type="button" disabled={localBusy !== null || !usdaPath.trim()} onClick={importUsdaDownload}>
+              <Save size={16} /> {localBusy === 'usda' ? 'Importando...' : 'Importar USDA'}
+            </button>
+          </div>
+        </details>
         <details className="inline-source-create" open={showCreateFood} onToggle={(event) => setShowCreateFood(event.currentTarget.open)}>
           <summary>Crear alimento local desde este problema</summary>
           <div className="source-form">
@@ -1263,6 +1344,7 @@ function IngredientMappingModal({
           </div>
         </details>
         <p className="muted">Esto guarda un alias confirmado y el scorer lo usará en generaciones, reemplazos y análisis nutricional.</p>
+        {sourceMessage && <p className="source-message">{sourceMessage}</p>}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button className="secondary" type="button" disabled={localBusy !== null} onClick={() => apply(false)}>

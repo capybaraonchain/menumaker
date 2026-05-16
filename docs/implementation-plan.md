@@ -256,7 +256,8 @@ Acceptance:
 - Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
 - Impossible-target failures can open a guided target-edit modal that saves revised macro targets and queues a new weekly generation through `updateMacroTargetAndGenerate`; immediate request-time execution is an explicit opt-in.
 - Low-confidence or ambiguous-ingredient failures can save a mapping and queue a retry generation without bypassing deterministic nutrition.
-- Ingredient remediation can search the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
+- Ingredient remediation can search and filter the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
+- Ingredient remediation can import Open Food Facts barcodes or downloaded USDA FoodData Central JSON from the failure modal before saving the alias.
 - Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and queue a retry job after confirmation.
 - `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.

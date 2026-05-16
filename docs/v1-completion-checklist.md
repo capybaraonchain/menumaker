@@ -97,6 +97,7 @@ An item is complete only when the behavior works locally, not merely when files 
 - [x] Perfil exposes in-app controls for Open Food Facts barcode import, USDA downloaded JSON import, and user-defined per-100g foods.
 - [x] Ingredient alias mapping can target imported/custom foods, not only seed foods.
 - [x] Ingredient remediation can search the source-backed nutrition catalog before saving an alias.
+- [x] Ingredient remediation can filter by nutrition source and import Open Food Facts barcode or USDA downloaded JSON sources without leaving the failure modal.
 - [x] Generation, meal-edit, and calorie-adjustment scoring read the database nutrition catalog before falling back to seed foods.
 - [x] Ingredient aliases work in Spanish and English.
 - [x] User-confirmed ingredient aliases can be saved and reused by the scorer.
