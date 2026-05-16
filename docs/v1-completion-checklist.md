@@ -211,7 +211,7 @@ An item is complete only when the behavior works locally, not merely when files 
 
 ## 12. Generation Progress And Failures
 
-Local v1 generation can still execute inside requests for direct “run now” actions, but weekly generation and long preview flows are job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves it to running and completed/failed/cancelled. A local worker command can process queued weekly or preview jobs outside the web request. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full hosted worker queues and streaming progress remain deferred.
+Local v1 generation can still execute inside requests for explicit “run now” controls, but weekly generation, failed-job retry, target-remediation generation, and long preview flows are job-owned: the app creates a queued `generation_jobs` row with serialized generation or preview input, then a reusable runner moves it to running and completed/failed/cancelled. A local worker command can process queued weekly or preview jobs outside the web request. The UI and MCP can read job status, logs, result metadata, failure code, retry count, and errors. Full hosted worker queues and streaming progress remain deferred.
 
 - [x] App state exposes recent generation jobs for the active profile.
 - [x] MCP exposes recent generation jobs.
@@ -227,7 +227,7 @@ Local v1 generation can still execute inside requests for direct “run now” a
 - [x] Queued/running generation and preview jobs can be cancelled from the app action registry, web UI, and MCP.
 - [x] Semana shows failed/running jobs instead of hiding them in database logs.
 - [x] Historial shows generation jobs alongside stored menus.
-- [x] Failed jobs can be retried through a typed action.
+- [x] Failed jobs can be retried through a typed action that creates a queued retry job instead of immediately running generation in the failed-job remediation request.
 - [x] Progress includes persisted week skeleton/building state in job logs.
 - [x] Progress includes persisted recipe generation state in job logs.
 - [x] Progress includes persisted nutrition/finalizing state in job logs.
@@ -240,9 +240,9 @@ Local v1 generation can still execute inside requests for direct “run now” a
 - [x] Generation-exhausted failure includes retry and persisted remediation steps.
 - [x] Unresolved repair issues can surface persisted remediation steps for the affected day/slot.
 - [x] Guided preference-relaxation remediation can remove selected dislikes/prohibited foods through a typed action.
-- [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes.
-- [x] Guided fallback-policy remediation can enable recipe/skeleton fallback and retry failed generation after confirmation.
-- [x] Guided target-editing remediation can save revised macro targets and generate a new week through typed actions.
+- [x] Guided preference-relaxation remediation can retry the failed generation after saving selected changes by queueing a retry job.
+- [x] Guided fallback-policy remediation can enable recipe/skeleton fallback and retry failed generation after confirmation by queueing a retry job.
+- [x] Guided target-editing remediation can save revised macro targets and queue a new week through typed actions, with immediate execution as an explicit opt-in.
 - [x] Repair-specific regeneration actions are available from persisted repair notices.
 
 ## 13. In-App Chat

@@ -254,11 +254,11 @@ Acceptance:
 - Chat responses can report cache hits without exposing provider tokens.
 - Completed and failed weekly-generation jobs expose a concise generation summary; successful LLM summaries are cached.
 - Failed jobs expose specific next steps for impossible targets, nutrition confidence, ambiguous ingredients, banned-item conflicts, repetition conflicts, and exhausted generation.
-- Impossible-target failures can open a guided target-edit modal that saves revised macro targets and starts a new weekly generation through `updateMacroTargetAndGenerate`.
-- Low-confidence or ambiguous-ingredient failures can save a mapping and retry the generation without bypassing deterministic nutrition.
+- Impossible-target failures can open a guided target-edit modal that saves revised macro targets and queues a new weekly generation through `updateMacroTargetAndGenerate`; immediate request-time execution is an explicit opt-in.
+- Low-confidence or ambiguous-ingredient failures can save a mapping and queue a retry generation without bypassing deterministic nutrition.
 - Ingredient remediation can search the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
 - Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
-- Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and retry the failed job after confirmation.
+- Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and queue a retry job after confirmation.
 - `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.
 - Semana offers `Encolar semana` as the enqueue-first generation path and keeps direct `Generar ahora` / queued-job `Ejecutar ahora` controls as explicit local fallback controls.
 - `processQueuedGenerationJobs` exposes one local worker drain pass through the app action registry, API, MCP, and Semana `Procesar cola` control.

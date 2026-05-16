@@ -189,7 +189,8 @@ export interface RetryGenerationJobResult {
   retriedJobId: string
   newJobId: string
   retryOfKind: string
-  menu: WeeklyMenuView
+  job: GenerationJobView
+  menu?: WeeklyMenuView
 }
 
 export interface CancelGenerationJobResult {
@@ -1733,12 +1734,11 @@ export async function retryGenerationJob(jobId: string): Promise<RetryGeneration
       updated_at = now()
     where id = ${jobId} and user_id = ${localUserId()}
   `
-  const menu = await runGenerationJob(retryJob.id)
   return {
     retriedJobId: jobId,
     newJobId: retryJob.id,
     retryOfKind: String(job.kind),
-    menu,
+    job: retryJob,
   }
 }
 

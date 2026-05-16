@@ -292,7 +292,7 @@ server.registerTool(
 server.registerTool(
   'retry_generation_job',
   {
-    description: 'Mutation: retry a failed weekly generation job through the shared app action registry. Creates a new stored weekly menu if the retry succeeds. Requires confirmed=true.',
+    description: 'Mutation: retry a failed weekly generation job through the shared app action registry by creating a queued retry job. Run process_generation_queue or run_generation_job to execute it. Requires confirmed=true.',
     inputSchema: { profileId: z.string().uuid(), jobId: z.string().uuid(), confirmed: z.boolean() },
     annotations: { readOnlyHint: false, openWorldHint: false },
   },
@@ -836,7 +836,7 @@ server.registerTool(
       proteinG: z.number().nonnegative().optional(),
       carbsG: z.number().nonnegative().optional(),
       fatG: z.number().nonnegative().optional(),
-      runNow: z.boolean().default(true),
+      runNow: z.boolean().default(false),
       retryJobId: z.string().uuid().optional(),
       confirmed: z.boolean(),
     },

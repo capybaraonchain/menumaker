@@ -1002,7 +1002,7 @@ function PreferenceRelaxationModal({
           </button>
           {job.status === 'failed' && (
             <button className="primary" type="button" disabled={localBusy !== null || totalSelected === 0} onClick={() => apply(true)}>
-              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Reintentando...' : 'Guardar y reintentar'}
+              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Encolando...' : 'Guardar y encolar reintento'}
             </button>
           )}
         </div>
@@ -1230,7 +1230,7 @@ function IngredientMappingModal({
           </button>
           {job.status === 'failed' && (
             <button className="primary" type="button" disabled={localBusy !== null} onClick={() => apply(true)}>
-              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Reintentando...' : 'Guardar y reintentar'}
+              <RefreshCw size={16} /> {localBusy === 'retry' ? 'Encolando...' : 'Guardar y encolar reintento'}
             </button>
           )}
         </div>
@@ -1297,13 +1297,13 @@ function FallbackPolicyModal({
         {job.status === 'failed' && (
           <label className="checkline">
             <input type="checkbox" checked={retryAfterSave} onChange={(event) => setRetryAfterSave(event.target.checked)} />
-            Guardar y reintentar este trabajo
+            Guardar y encolar reintento
           </label>
         )}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button className="primary" type="button" disabled={localBusy || (!recipeFallback && !skeletonFallback)} onClick={apply}>
-            <Save size={16} /> {localBusy ? 'Aplicando...' : retryAfterSave ? 'Guardar y reintentar' : 'Guardar política'}
+            <Save size={16} /> {localBusy ? 'Aplicando...' : retryAfterSave ? 'Guardar y encolar' : 'Guardar política'}
           </button>
           <button className="secondary" type="button" disabled={localBusy} onClick={onClose}>
             <X size={16} /> Cancelar
@@ -1332,7 +1332,7 @@ function TargetEditModal({
   const [proteinG, setProteinG] = useState(String(target.proteinG ?? ''))
   const [carbsG, setCarbsG] = useState(String(target.carbsG ?? ''))
   const [fatG, setFatG] = useState(String(target.fatG ?? ''))
-  const [runNow, setRunNow] = useState(true)
+  const [runNow, setRunNow] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [localBusy, setLocalBusy] = useState(false)
 
@@ -1370,7 +1370,7 @@ function TargetEditModal({
     <Modal title="Ajustar objetivo" onClose={onClose}>
       <div className="remediation-modal">
         <p>{plan.summary}</p>
-        <p className="muted">Guarda un nuevo objetivo y lanza una generación semanal con ese target. Si dejas proteína, carbohidratos o grasa vacíos, la app conserva el valor actual o recalcula carbohidratos cuando sea necesario.</p>
+        <p className="muted">Guarda un nuevo objetivo y deja una generación semanal en cola con ese target. Si dejas proteína, carbohidratos o grasa vacíos, la app conserva el valor actual o recalcula carbohidratos cuando sea necesario.</p>
         <div className="source-grid macros">
           <label>kcal/día<input value={calories} inputMode="numeric" onChange={(event) => setCalories(event.target.value)} /></label>
           <label>Proteína g<input value={proteinG} inputMode="decimal" onChange={(event) => setProteinG(event.target.value)} /></label>
@@ -1379,12 +1379,12 @@ function TargetEditModal({
         </div>
         <label className="checkline">
           <input type="checkbox" checked={runNow} onChange={(event) => setRunNow(event.target.checked)} />
-          Guardar y generar una semana nueva ahora
+          Ejecutar inmediatamente en vez de dejarlo en cola
         </label>
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button className="primary" type="button" disabled={localBusy} onClick={apply}>
-            <Save size={16} /> {localBusy ? 'Aplicando...' : runNow ? 'Guardar y generar' : 'Guardar objetivo'}
+            <Save size={16} /> {localBusy ? 'Aplicando...' : runNow ? 'Guardar y generar' : 'Guardar y encolar'}
           </button>
           <button className="secondary" type="button" disabled={localBusy} onClick={onClose}>
             <X size={16} /> Cancelar

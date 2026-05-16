@@ -160,7 +160,7 @@ export const appActionSchemas = {
     proteinG: z.number().nonnegative().optional(),
     carbsG: z.number().nonnegative().optional(),
     fatG: z.number().nonnegative().optional(),
-    runNow: z.boolean().default(true),
+    runNow: z.boolean().default(false),
     retryJobId: uuid.optional(),
   }),
   startWeeklyMenuGeneration: z.object({
@@ -550,13 +550,18 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
       const menuId = result && typeof result === 'object' && typeof (result as { menu?: { id?: unknown } }).menu?.id === 'string'
         ? (result as { menu: { id: string } }).menu.id
         : null
-      return menuId ? 'Listo. Reintenté la generación y guardé un nuevo menú.' : 'Listo. Reintenté la generación.'
+      const jobId = result && typeof result === 'object' && typeof (result as { newJobId?: unknown }).newJobId === 'string'
+        ? (result as { newJobId: string }).newJobId
+        : null
+      return menuId
+        ? 'Listo. Reintenté la generación y guardé un nuevo menú.'
+        : `Listo. Dejé el reintento en cola${jobId ? ` (${jobId})` : ''}.`
     },
     async execute(input) {
       const result = await retryGenerationJob(input.jobId)
       return {
         ...result,
-        state: await appStateResult(input.profileId ?? result.menu.profileId),
+        state: await appStateResult(input.profileId ?? result.job.profileId ?? undefined),
       }
     },
   },

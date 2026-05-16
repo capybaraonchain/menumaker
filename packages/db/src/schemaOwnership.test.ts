@@ -141,7 +141,7 @@ test('failure UI has guided fallback remediation instead of direct fallback muta
 
   assert.match(webPage, /function FallbackPolicyModal/)
   assert.match(webPage, /onFallbackPolicy\(\{ job, plan \}\)/)
-  assert.match(webPage, /Guardar y reintentar este trabajo/)
+  assert.match(webPage, /Guardar y encolar reintento/)
   assert.match(webPage, /action: 'setFallbackPolicy'/)
 })
 
@@ -156,12 +156,15 @@ test('target remediation saves revised macro targets through shared actions and 
   assert.match(appService, /saveMacroTarget\(profileId, target\)/)
   assert.match(appService, /enqueueWeeklyMenuGenerationJob\(profileId, targetId, target, 'target_remediation_generation'\)/)
   assert.match(appActions, /updateMacroTargetAndGenerate: z\.object/)
+  assert.match(appActions, /runNow: z\.boolean\(\)\.default\(false\)/)
   assert.match(appActions, /auditLabel: 'mutation\.update_macro_target_and_generate'/)
   assert.match(mcp, /'update_macro_target_and_generate'/)
   assert.match(apiRoute, /updateMacroTargetAndGenerate: 'updateMacroTargetAndGenerate'/)
   assert.match(webPage, /function TargetEditModal/)
   assert.match(webPage, /action: 'updateMacroTargetAndGenerate'/)
   assert.match(webPage, /onAdjustTargets\(\{ job, plan \}\)/)
+  assert.match(webPage, /const \[runNow, setRunNow\] = useState\(false\)/)
+  assert.match(webPage, /Guardar y encolar/)
 })
 
 test('ingredient remediation searches source-backed nutrition foods through shared actions and MCP', () => {
@@ -207,4 +210,20 @@ test('queued generation jobs have a local worker entrypoint', () => {
   assert.match(webPage, /Procesar cola/)
   assert.match(dbPackage, /"worker:generation": "tsx src\/generationWorker\.ts"/)
   assert.match(rootPackage, /"worker:generation": "npm --workspace @menumaker\/db run worker:generation"/)
+})
+
+test('failed generation retry is enqueue-first instead of request-time execution', () => {
+  const appService = readFileSync(resolve(root, 'packages/db/src/appService.ts'), 'utf8')
+  const appActions = readFileSync(resolve(root, 'packages/db/src/appActions.ts'), 'utf8')
+  const mcp = readFileSync(resolve(root, 'apps/mcp/src/server.ts'), 'utf8')
+
+  const start = appService.indexOf('export async function retryGenerationJob')
+  assert.notEqual(start, -1, 'retryGenerationJob must exist')
+  const next = appService.indexOf('\nexport async function ', start + 1)
+  const body = appService.slice(start, next === -1 ? undefined : next)
+  assert.match(body, /enqueueWeeklyMenuGenerationJob\(profile\.id/)
+  assert.doesNotMatch(body, /runGenerationJob\(retryJob\.id\)/)
+  assert.match(body, /job: retryJob/)
+  assert.match(appActions, /Dejé el reintento en cola/)
+  assert.match(mcp, /creating a queued retry job/)
 })
