@@ -9,7 +9,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const path = argv.find((arg) => !arg.startsWith('--'))
   if (!path) {
-    throw new Error('Uso: npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json [--limit=1000] [--fdc-id=321358]')
+    throw new Error('Uso: npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.zip [--limit=1000] [--fdc-id=321358]\nTambién acepta JSON extraído o URL HTTPS de fdc.nal.usda.gov/fdc-datasets/*.zip.')
   }
 
   const includeFdcIds = argv

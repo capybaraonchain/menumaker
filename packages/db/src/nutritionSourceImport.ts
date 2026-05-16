@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { inflateRawSync } from 'node:zlib'
 import { z } from 'zod'
 import { normalizeIngredientName } from '@menumaker/nutrition'
 import { closeDb, sqlClient } from './client'
@@ -196,10 +197,16 @@ export async function importUsdaFoodDataCentralDownloadFile(
   path: string,
   options: UsdaFoodDataCentralDownloadOptions = {},
 ): Promise<{ imported: number; sources: string[]; records: NutritionSourceRecord[] }> {
-  const raw = await readFile(path, 'utf8')
-  const records = parseUsdaFoodDataCentralDownload(JSON.parse(raw), options)
+  const input = await readUsdaDownloadInput(path)
+  const records = parseUsdaFoodDataCentralDownload(input, options)
   const result = await importNutritionSourceRecords(records)
   return { ...result, records }
+}
+
+export async function readUsdaDownloadInput(pathOrUrl: string): Promise<unknown> {
+  const buffer = await readPathOrUrl(pathOrUrl)
+  if (isZipBuffer(buffer)) return parseUsdaJsonFromZip(buffer)
+  return JSON.parse(buffer.toString('utf8'))
 }
 
 export function openFoodFactsProductToRecord(input: OpenFoodFactsProductResponse): NutritionSourceRecord {
@@ -310,6 +317,85 @@ export async function importOpenFoodFactsBarcodes(barcodes: string[]): Promise<{
 
 function normalizeFoodId(value: string): string {
   return normalizeIngredientName(value).replace(/\s+/g, '_')
+}
+
+async function readPathOrUrl(pathOrUrl: string): Promise<Buffer> {
+  if (/^https?:\/\//i.test(pathOrUrl)) {
+    const url = new URL(pathOrUrl)
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+      throw new Error('USDA solo acepta URLs HTTPS, salvo localhost para pruebas.')
+    }
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'MenuMaker/0.1 local USDA FoodData Central import (https://github.com/capybaraonchain/menumaker)',
+        Accept: 'application/zip, application/json, */*',
+      },
+    })
+    if (!response.ok) throw new Error(`USDA FoodData Central no respondió correctamente: ${response.status}.`)
+    return Buffer.from(await response.arrayBuffer())
+  }
+  return readFile(pathOrUrl)
+}
+
+function isZipBuffer(buffer: Buffer): boolean {
+  return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04
+}
+
+function parseUsdaJsonFromZip(buffer: Buffer): unknown {
+  const jsonEntries = extractZipEntries(buffer)
+    .filter((entry) => entry.name.toLowerCase().endsWith('.json'))
+    .sort((a, b) => b.data.length - a.data.length)
+
+  for (const entry of jsonEntries) {
+    try {
+      const parsed = JSON.parse(entry.data.toString('utf8'))
+      usdaDownloadFoods(parsed)
+      return parsed
+    } catch {
+      // Official USDA archives may include documentation JSON in future releases.
+      // Keep scanning until one entry has a supported FoodData Central root.
+    }
+  }
+
+  throw new Error('El ZIP de USDA no contiene un JSON FoodData Central soportado.')
+}
+
+function extractZipEntries(buffer: Buffer): Array<{ name: string; data: Buffer }> {
+  const centralDirectoryOffset = findEndOfCentralDirectory(buffer)
+  const entries: Array<{ name: string; data: Buffer }> = []
+  let offset = centralDirectoryOffset
+
+  while (offset + 46 <= buffer.length && buffer.readUInt32LE(offset) === 0x02014b50) {
+    const compressionMethod = buffer.readUInt16LE(offset + 10)
+    const compressedSize = buffer.readUInt32LE(offset + 20)
+    const fileNameLength = buffer.readUInt16LE(offset + 28)
+    const extraLength = buffer.readUInt16LE(offset + 30)
+    const commentLength = buffer.readUInt16LE(offset + 32)
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42)
+    const name = buffer.toString('utf8', offset + 46, offset + 46 + fileNameLength)
+
+    const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26)
+    const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28)
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength
+    const compressed = buffer.subarray(dataStart, dataStart + compressedSize)
+    const data = compressionMethod === 0
+      ? compressed
+      : compressionMethod === 8
+        ? inflateRawSync(compressed)
+        : null
+
+    if (data) entries.push({ name, data })
+    offset += 46 + fileNameLength + extraLength + commentLength
+  }
+
+  return entries
+}
+
+function findEndOfCentralDirectory(buffer: Buffer): number {
+  for (let offset = buffer.length - 22; offset >= Math.max(0, buffer.length - 65557); offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) return buffer.readUInt32LE(offset + 16)
+  }
+  throw new Error('ZIP inválido: no se encontró el directorio central.')
 }
 
 function numberFrom(value: unknown): number | null {

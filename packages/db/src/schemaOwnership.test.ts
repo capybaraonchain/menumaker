@@ -107,6 +107,8 @@ test('USDA downloadable dataset import is keyless and exposed through shared act
 
   assert.match(nutritionImport, /parseUsdaFoodDataCentralDownload/)
   assert.match(nutritionImport, /usdaFoodDataCentralDownloadFoodToRecord/)
+  assert.match(nutritionImport, /parseUsdaJsonFromZip/)
+  assert.match(nutritionImport, /readPathOrUrl/)
   assert.match(packageJson, /nutrition:import:usda-download/)
   assert.match(appActions, /importUsdaFoodDataCentralDownload: z\.object/)
   assert.match(appActions, /importUsdaFoodDataCentralDownloadFile\(input\.path/)
@@ -187,6 +189,9 @@ test('ingredient remediation searches source-backed nutrition foods through shar
   assert.match(webPage, /Importar fuente ahora/)
   assert.match(webPage, /action: 'importOpenFoodFactsProduct'/)
   assert.match(webPage, /action: 'importUsdaFoodDataCentralDownload'/)
+  assert.match(webPage, /function confidenceExplanation/)
+  assert.match(webPage, /unknown: falta una fuente determinística/)
+  assert.match(webPage, /item\.notes\.slice\(0, 2\)\.join/)
   assert.match(webPage, /Crear alimento local desde este problema/)
   assert.match(webPage, /action: 'createUserNutritionFood'/)
 })

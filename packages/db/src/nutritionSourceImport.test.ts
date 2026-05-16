@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+import { deflateRawSync } from 'node:zlib'
 import {
   normalizeNutritionSourceRecords,
   openFoodFactsProductToRecord,
   parseNutritionSourceRecords,
   parseUsdaFoodDataCentralDownload,
+  readUsdaDownloadInput,
   usdaFoodDataCentralDownloadFoodToRecord,
 } from './nutritionSourceImport'
 
@@ -164,3 +169,74 @@ test('parses USDA FoodData Central download roots and skips incomplete non-selec
   assert.equal(records.length, 1)
   assert.equal(records[0]?.sourceId, 'usda_fdc:2')
 })
+
+test('reads USDA FoodData Central JSON from an official-style zip download', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'menumaker-usda-'))
+  const zipPath = join(dir, 'FoodData_Central_foundation_food_json_2026-04-30.zip')
+  try {
+    await writeFile(zipPath, zipWithDeflatedEntry('FoodData_Central_foundation_food_json_2026-04-30.json', JSON.stringify({
+      FoundationFoods: [{
+        fdcId: 3,
+        description: 'Zip complete food',
+        foodNutrients: [
+          { nutrient: { number: '208' }, amount: 110 },
+          { nutrient: { number: '203' }, amount: 9 },
+          { nutrient: { number: '205' }, amount: 22 },
+          { nutrient: { number: '204' }, amount: 1 },
+        ],
+      }],
+    })))
+
+    const records = parseUsdaFoodDataCentralDownload(await readUsdaDownloadInput(zipPath))
+    assert.equal(records.length, 1)
+    assert.equal(records[0]?.sourceId, 'usda_fdc:3')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+function zipWithDeflatedEntry(name: string, contents: string): Buffer {
+  const nameBuffer = Buffer.from(name)
+  const data = Buffer.from(contents)
+  const compressed = deflateRawSync(data)
+  const crc = crc32(data)
+  const localHeader = Buffer.alloc(30)
+  localHeader.writeUInt32LE(0x04034b50, 0)
+  localHeader.writeUInt16LE(20, 4)
+  localHeader.writeUInt16LE(8, 8)
+  localHeader.writeUInt32LE(crc, 14)
+  localHeader.writeUInt32LE(compressed.length, 18)
+  localHeader.writeUInt32LE(data.length, 22)
+  localHeader.writeUInt16LE(nameBuffer.length, 26)
+
+  const centralHeader = Buffer.alloc(46)
+  centralHeader.writeUInt32LE(0x02014b50, 0)
+  centralHeader.writeUInt16LE(20, 4)
+  centralHeader.writeUInt16LE(20, 6)
+  centralHeader.writeUInt16LE(8, 10)
+  centralHeader.writeUInt32LE(crc, 16)
+  centralHeader.writeUInt32LE(compressed.length, 20)
+  centralHeader.writeUInt32LE(data.length, 24)
+  centralHeader.writeUInt16LE(nameBuffer.length, 28)
+
+  const centralOffset = localHeader.length + nameBuffer.length + compressed.length
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(1, 8)
+  end.writeUInt16LE(1, 10)
+  end.writeUInt32LE(centralHeader.length + nameBuffer.length, 12)
+  end.writeUInt32LE(centralOffset, 16)
+
+  return Buffer.concat([localHeader, nameBuffer, compressed, centralHeader, nameBuffer, end])
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff
+  for (const byte of buffer) {
+    crc ^= byte
+    for (let index = 0; index < 8; index += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}

@@ -1163,7 +1163,7 @@ function IngredientMappingModal({
 
   async function importUsdaDownload() {
     if (!usdaPath.trim()) {
-      setError('Escribe la ruta local del JSON descargado de USDA.')
+      setError('Escribe la ruta local o URL HTTPS del ZIP/JSON descargado de USDA.')
       return
     }
     setError(null)
@@ -1300,7 +1300,7 @@ function IngredientMappingModal({
                 onClick={() => setCanonicalFoodName(food.name)}
               >
                 <strong>{food.name}</strong>
-                <span>{food.category} · {(food.sources ?? []).join(', ') || 'fuente local'} · {food.confidence ?? 'database'}</span>
+                <span>{food.category} · {(food.sources ?? []).join(', ') || 'fuente local'} · {confidenceExplanation(food.confidence ?? 'database')}</span>
                 {food.per100g && <span>{Math.round(food.per100g.calories)} kcal · {roundOne(food.per100g.proteinG)}g P · {roundOne(food.per100g.carbsG)}g C · {roundOne(food.per100g.fatG)}g G /100g</span>}
               </button>
             ))}
@@ -1313,7 +1313,7 @@ function IngredientMappingModal({
             <button className="secondary" type="button" disabled={localBusy !== null || !/^\d{6,14}$/.test(barcode)} onClick={importBarcodeProduct}>
               <Save size={16} /> {localBusy === 'off' ? 'Importando...' : 'Importar producto'}
             </button>
-            <label>Ruta JSON local USDA<input value={usdaPath} placeholder="/Users/.../FoodData_Central_foundation_food_json_2026-04-30.json" onChange={(event) => setUsdaPath(event.target.value)} /></label>
+            <label>Ruta o URL ZIP/JSON USDA<input value={usdaPath} placeholder="https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip" onChange={(event) => setUsdaPath(event.target.value)} /></label>
             <div className="source-grid">
               <label>FDC IDs opcionales<input value={usdaFdcIds} placeholder="321358, 170379" onChange={(event) => setUsdaFdcIds(event.target.value)} /></label>
               <label>Límite opcional<input value={usdaLimit} inputMode="numeric" placeholder="1000" onChange={(event) => setUsdaLimit(event.target.value)} /></label>
@@ -1534,7 +1534,14 @@ function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal;
           <button className="primary" onClick={onEdit}><Sparkles /> Editar</button>
         </div>
         <h3>Ingredientes</h3>
-        <ul className="ingredient-list">{meal.recipe.ingredients.map((item) => <li key={item.id}><span>{item.name}</span><small>{item.amount} {item.unit} · {item.confidence}</small></li>)}</ul>
+        <ul className="ingredient-list">{meal.recipe.ingredients.map((item) => (
+          <li key={item.id}>
+            <span>{item.name}</span>
+            <small>{item.amount} {item.unit} · {confidenceExplanation(item.confidence)}</small>
+            {item.notes.length > 0 && <small>{item.notes.slice(0, 2).join(' ')}</small>}
+          </li>
+        ))}</ul>
+        <p className="muted">{confidenceExplanation(meal.nutrition.confidence)}</p>
         <h3>Pasos</h3>
         <ol className="steps">{meal.recipe.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>
       </div>
@@ -1800,7 +1807,7 @@ function NutritionSourcesPanel({
       <details>
         <summary>Importar USDA FoodData Central descargado</summary>
         <div className="source-form">
-          <label>Ruta JSON local<input value={usdaPath} placeholder="/Users/.../FoodData_Central_foundation_food_json_2026-04-30.json" onChange={(event) => setUsdaPath(event.target.value)} /></label>
+          <label>Ruta o URL ZIP/JSON<input value={usdaPath} placeholder="https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip" onChange={(event) => setUsdaPath(event.target.value)} /></label>
           <div className="source-grid">
             <label>FDC IDs opcionales<input value={usdaFdcIds} placeholder="321358, 170379" onChange={(event) => setUsdaFdcIds(event.target.value)} /></label>
             <label>Límite opcional<input value={usdaLimit} inputMode="numeric" placeholder="1000" onChange={(event) => setUsdaLimit(event.target.value)} /></label>
@@ -1954,6 +1961,16 @@ function sourceSummary(counts: Record<string, number>): string {
   const entries = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))
   if (entries.length === 0) return 'Aún no hay fuentes importadas.'
   return entries.map(([source, count]) => `${source}: ${count}`).join(' · ')
+}
+
+function confidenceExplanation(confidence: string): string {
+  if (confidence === 'exact') return 'exacto: cantidad en gramos/ml y fuente directa'
+  if (confidence === 'barcode') return 'barcode: datos de producto importado por código de barras'
+  if (confidence === 'database') return 'database: datos determinísticos de fuente nutricional'
+  if (confidence === 'generic') return 'generic: alimento conocido con conversión de porción aproximada'
+  if (confidence === 'estimated') return 'estimated: conversión genérica, revisar si este ingrediente aporta mucho'
+  if (confidence === 'unknown') return 'unknown: falta una fuente determinística; conviene mapear o importar el alimento'
+  return confidence
 }
 
 function formatDate(value: string): string {

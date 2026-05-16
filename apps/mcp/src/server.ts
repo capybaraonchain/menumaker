@@ -430,7 +430,7 @@ server.registerTool(
 server.registerTool(
   'import_usda_fdc_download',
   {
-    description: 'Mutation: import a local USDA FoodData Central downloadable JSON dataset into MenuMaker source nutrition tables. No API key is used. Requires confirmed=true.',
+    description: 'Mutation: import a USDA FoodData Central downloadable ZIP/JSON dataset or HTTPS dataset URL into MenuMaker source nutrition tables. No API key is used. Requires confirmed=true.',
     inputSchema: {
       profileId: z.string().uuid().optional(),
       path: z.string().min(1),

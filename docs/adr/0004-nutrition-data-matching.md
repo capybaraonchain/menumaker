@@ -176,15 +176,15 @@ The Open Food Facts adapter uses the public product-by-barcode API, imports per-
 
 The same import is exposed through the shared app action registry and MCP as `import_open_food_facts_product`, behind explicit confirmation. Agents should use that tool instead of shelling out to the CLI when operating MenuMaker.
 
-USDA FoodData Central can be imported without an API key from the official downloadable JSON datasets:
+USDA FoodData Central can be imported without an API key from the official downloadable ZIP/JSON datasets:
 
 ```bash
-npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json
+npm --workspace @menumaker/db run nutrition:import:usda-download -- https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip --limit=1000
 ```
 
-The USDA download adapter maps FDC IDs to `source = usda_fdc`, extracts per-100g calories/protein/carbs/fat/fiber from FoodData Central nutrient IDs/numbers, imports household portions when gram weights are present, and stores dataset metadata in `source_foods.payload`. Local v1 does not use the FoodData Central API-key endpoint; if a USDA JSON record lacks complete macro fields, it is skipped during bulk import or rejected when explicitly selected.
+The USDA download adapter accepts a local ZIP, local extracted JSON, or HTTPS URL to the official `fdc.nal.usda.gov/fdc-datasets/*.zip` files. It maps FDC IDs to `source = usda_fdc`, extracts per-100g calories/protein/carbs/fat/fiber from FoodData Central nutrient IDs/numbers, imports household portions when gram weights are present, and stores dataset metadata in `source_foods.payload`. Local v1 does not use the FoodData Central API-key endpoint; if a USDA JSON record lacks complete macro fields, it is skipped during bulk import or rejected when explicitly selected.
 
-The same import is exposed through the shared app action registry and MCP as `import_usda_fdc_download`, behind explicit confirmation. Agents should use it only for local downloaded JSON files.
+The same import is exposed through the shared app action registry and MCP as `import_usda_fdc_download`, behind explicit confirmation. Agents should prefer Foundation Foods for generic ingredients because it is small enough for local import, then use FNDDS/SR Legacy only when broader coverage is needed.
 
 When no packaged-product barcode or imported source record exists, local v1 can create a user-defined deterministic food through `create_user_nutrition_food`. This stores user-provided per-100g nutrition in the same source tables with `source = user`, making it available to the deterministic scorer and later alias mapping. Agents must treat these values as user-entered facts, not authoritative public-source data.
 

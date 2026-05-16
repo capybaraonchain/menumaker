@@ -693,7 +693,7 @@ export const appActionRegistry: { [Name in AppActionName]: AppActionDefinition<N
     requiresConfirmation: true,
     auditLabel: 'mutation.import_usda_fdc_download',
     confirmationCopyEs: (input) => [
-      `Se importará el dataset descargado de USDA FoodData Central desde **${input.path}** como fuente nutricional determinística.`,
+      `Se importará el dataset descargable de USDA FoodData Central desde **${input.path}** como fuente nutricional determinística. Puede ser ZIP oficial, JSON extraído o URL HTTPS.`,
       input.fdcIds.length ? `Solo se importarán los FDC IDs: ${input.fdcIds.join(', ')}.` : '',
       input.limit ? `Límite de registros: ${input.limit}.` : '',
       '¿Continuar?',

@@ -101,7 +101,7 @@ Acceptance:
 - High-risk profile-scoped mutations use a shared local-user ownership guard before writing, so hosted auth/RLS can replace the local stub without changing every service boundary.
 - Nutrition source tables have idempotent `(food_id, source_id)` records and can be populated through `npm --workspace @menumaker/db run nutrition:import -- ./foods.json`.
 - Open Food Facts barcode products can be fetched and imported with `npm --workspace @menumaker/db run nutrition:import:off -- <barcode>`.
-- USDA FoodData Central downloadable JSON datasets can be imported without an API key with `npm --workspace @menumaker/db run nutrition:import:usda-download -- ./FoodData_Central_foundation_food_json_YYYY-MM-DD.json`.
+- USDA FoodData Central downloadable ZIP/JSON datasets can be imported without an API key with `npm --workspace @menumaker/db run nutrition:import:usda-download -- https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip --limit=1000`; local extracted JSON files still work.
 - Perfil includes local source controls for Open Food Facts barcode import, USDA downloaded JSON import, and user-defined per-100g foods, all backed by the shared app action registry.
 - App scoring reads the source-backed nutrition catalog from Postgres; seed foods remain the fallback baseline when no source records exist.
 
@@ -257,8 +257,9 @@ Acceptance:
 - Impossible-target failures can open a guided target-edit modal that saves revised macro targets and queues a new weekly generation through `updateMacroTargetAndGenerate`; immediate request-time execution is an explicit opt-in.
 - Low-confidence or ambiguous-ingredient failures can save a mapping and queue a retry generation without bypassing deterministic nutrition.
 - Ingredient remediation can search and filter the source-backed nutrition catalog, including imported USDA/Open Food Facts/custom foods, before saving a mapping.
-- Ingredient remediation can import Open Food Facts barcodes or downloaded USDA FoodData Central JSON from the failure modal before saving the alias.
+- Ingredient remediation can import Open Food Facts barcodes or downloaded USDA FoodData Central ZIP/JSON from the failure modal before saving the alias.
 - Ingredient remediation can create a user-defined per-100g food inline, select it as the canonical food, and then save the alias through the same deterministic source tables.
+- Meal detail and remediation search results explain confidence labels and ingredient calculation notes in Spanish, instead of showing only raw enum values.
 - Too-few-candidate failures can open a guided fallback-policy modal, explicitly enable recipe/skeleton fallback, and queue a retry job after confirmation.
 - `npm --workspace @menumaker/db run worker:generation -- --limit=1` can drain queued weekly or preview jobs through the same persisted runners without executing inside the web request.
 - Semana offers `Encolar semana` as the enqueue-first generation path and keeps direct `Generar ahora` / queued-job `Ejecutar ahora` controls as explicit local fallback controls.
@@ -283,7 +284,7 @@ The planner should:
 
 The local deterministic recipe set is a fallback for unavailable or failed LLM generation, not the normal source of weekly menus or replacements.
 
-Nutrition source records are similarly not a mock-only schema. Local v1 can import normalized BEDCA/USDA/Open Food Facts-style JSON records into `source_foods`, `nutrition_records`, and `food_mappings`, can fetch Open Food Facts packaged products directly by barcode, and can import USDA FoodData Central downloadable JSON files without using an API key. Generation, meal editing, and calorie adjustment then score against that database catalog. The seed catalog remains a baseline for local setup and tests.
+Nutrition source records are similarly not a mock-only schema. Local v1 can import normalized BEDCA/USDA/Open Food Facts-style JSON records into `source_foods`, `nutrition_records`, and `food_mappings`, can fetch Open Food Facts packaged products directly by barcode, and can import USDA FoodData Central downloadable ZIP/JSON files or official HTTPS dataset URLs without using an API key. Generation, meal editing, and calorie adjustment then score against that database catalog. The seed catalog remains a baseline for local setup and tests.
 
 Acceptance:
 
