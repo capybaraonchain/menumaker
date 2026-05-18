@@ -192,11 +192,26 @@ export default function App() {
     void loadState()
   }, [])
 
+  useEffect(() => {
+    if (!activeProfileId) return
+    const hasActiveJob = state?.generationJobs?.some((job) => job.status === 'queued' || job.status === 'running')
+    if (!hasActiveJob) return
+    const interval = window.setInterval(() => {
+      void refreshState(activeProfileId)
+    }, 4000)
+    return () => window.clearInterval(interval)
+  }, [activeProfileId, state?.generationJobs?.map((job) => `${job.id}:${job.status}`).join('|')])
+
   async function loadState(profileId?: string) {
     setLoading(true)
     const res = await fetch(`/api/state${profileId ? `?profileId=${profileId}` : ''}`)
     setState(await res.json())
     setLoading(false)
+  }
+
+  async function refreshState(profileId?: string) {
+    const res = await fetch(`/api/state${profileId ? `?profileId=${profileId}` : ''}`)
+    setState(await res.json())
   }
 
   async function postAction(payload: any) {
@@ -500,11 +515,13 @@ export default function App() {
 
 function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) => void; embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
   const [rough, setRough] = useState(true)
   const [macroMode, setMacroMode] = useState('balanced')
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
+    setSubmitting(true)
     const form = new FormData(event.currentTarget)
     const selectedMacroMode = String(form.get('macroMode') || 'balanced')
     const payload = {
@@ -529,10 +546,16 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
       dislikes: splitList(String(form.get('dislikes') || '')),
       bannedFoods: splitList(String(form.get('bannedFoods') || '')),
     }
-    const res = await fetch('/api/onboarding', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
-    const data = await res.json()
-    if (!res.ok) setError(data.error)
-    else onDone(data)
+    try {
+      const res = await fetch('/api/onboarding', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+      const data = await res.json()
+      if (!res.ok) setError(data?.error ?? 'Error de onboarding.')
+      else onDone(data)
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'No se pudo completar el onboarding.')
+    } finally {
+      setSubmitting(false)
+    }
   }
   const content = (
       <section className={`onboarding-panel ${embedded ? 'embedded' : ''}`}>
@@ -560,11 +583,13 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
             </div>
           )}
           <label>Me gusta<input name="likes" placeholder="salmón, arroz, yogur" /></label>
-          <label>No me gusta<input name="dislikes" placeholder="brócoli, atún..." /></label>
-          <label>Prohibidos<input name="bannedFoods" placeholder="ingredientes separados por coma" /></label>
+          <label>Evitar<input name="dislikes" placeholder="brócoli, atún, cilantro..." /></label>
+          <label>No puedo comer<input name="bannedFoods" placeholder="cacahuetes, marisco, gluten..." /></label>
           <label className="checkline"><input type="checkbox" checked={rough} onChange={(event) => setRough(event.target.checked)} /> Acepto estimaciones aproximadas si omito edad o sexo.</label>
           {error && <p className="error">{error}</p>}
-          <button className="primary"><Sparkles /> Generar primera semana</button>
+          <button className="primary" type="submit" disabled={submitting}>
+            <Sparkles /> {submitting ? 'Generando...' : 'Generar primera semana'}
+          </button>
         </form>
       </section>
   )
@@ -601,10 +626,10 @@ function WeekScreen({
         {state.activeProfile?.latestTarget && (
           <div className="action-row">
             <button className="primary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: false })}>
-              <Sparkles /> Encolar semana
+              <Sparkles /> Generar semana (en segundo plano)
             </button>
             <button className="secondary" onClick={() => onAction({ action: 'startWeeklyMenuGeneration', profileId: state.activeProfile?.id, runNow: true })}>
-              <RefreshCw /> Generar ahora
+              <RefreshCw /> Generar semana ahora
             </button>
           </div>
         )}
@@ -672,10 +697,10 @@ function GenerationNotice({
 }) {
   const settings = menu.generationSettings ?? {}
   const fallbackSlots = Array.isArray(settings.fallbackSlots) ? settings.fallbackSlots : []
-  const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { slots?: Record<string, any> } : null
+  const trace = settings.trace && typeof settings.trace === 'object' ? settings.trace as { mode?: string; slots?: Record<string, any>; fast?: { durationMs?: number; acceptedSelectedMealCount?: number; acceptedReserveMealCount?: number } } : null
   const skeletonTrace = settings.weekSkeletonTrace && typeof settings.weekSkeletonTrace === 'object' ? settings.weekSkeletonTrace as Record<string, any> : null
   const repair = settings.repair && typeof settings.repair === 'object' ? settings.repair as { attempted?: boolean; actions?: unknown[]; repaired?: boolean } : null
-  const generationSummary = generationSummaryText(settings.generationSummary)
+  const generationSummary = generationSummaryText(settings.generationSummary) ?? generationSummaryText(settings.fastSummary)
   const repairRemediation = repairRemediationPlans(settings.repairRemediation)
   const slotTraces = Object.values(trace?.slots ?? {})
   const cacheHits = slotTraces.filter((item) => item?.cacheHit).length
@@ -699,7 +724,15 @@ function GenerationNotice({
     )
   }
   if (source === 'llm' || cacheHits > 0 || skeletonTrace?.providerSource === 'llm') {
+    const fastTrace = trace?.mode === 'fast_full_week' ? trace : null
+    const fastTraceDetails = fastTrace?.fast ? [
+      'Semana inicial rápida validada localmente.',
+      typeof fastTrace.fast.acceptedSelectedMealCount === 'number' ? `${fastTrace.fast.acceptedSelectedMealCount} comidas aceptadas.` : null,
+      typeof fastTrace.fast.acceptedReserveMealCount === 'number' ? `${fastTrace.fast.acceptedReserveMealCount} reservas aceptadas.` : null,
+      typeof fastTrace.fast.durationMs === 'number' ? `${Math.round(fastTrace.fast.durationMs / 1000)}s.` : null,
+    ].filter(Boolean).join(' ') : null
     const details = [
+      fastTraceDetails,
       skeletonTrace?.providerSource === 'llm' ? 'Esqueleto semanal LLM.' : null,
       cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Nutrición calculada con datos determinísticos.',
       repairActions > 0 ? `${repairActions} reparación(es) de selección aplicadas.` : null,
@@ -811,8 +844,16 @@ function GenerationJobsPanel({
       <header>
         <span>{visibleJobs.some((job) => job.status === 'failed') ? <AlertTriangle /> : <LoaderCircle />}</span>
         <div>
-          <strong>{visibleJobs.some((job) => job.status === 'failed') ? 'Generación necesita atención' : 'Generación en curso'}</strong>
-          <small>Estado persistido del trabajo, no un mensaje genérico.</small>
+          <strong>{visibleJobs.some((job) => job.status === 'failed')
+              ? 'Generación necesita atención'
+              : visibleJobs.some((job) => job.status === 'running')
+                ? 'Generación en ejecución'
+                : 'Trabajos pendientes de generación'}</strong>
+          <small>{visibleJobs.some((job) => job.status === 'running')
+              ? 'El backend está ejecutando el trabajo ahora.'
+              : visibleJobs.some((job) => job.status === 'queued')
+                ? 'El trabajo está en cola y espera ejecución.'
+                : 'Estado persistido del trabajo, no un mensaje genérico.'}</small>
         </div>
         {queuedJobs.length > 0 && (
           <button className="secondary compact-action" type="button" onClick={() => onAction({ action: 'processQueuedGenerationJobs', profileId, limit: 1 })}>
@@ -1032,9 +1073,9 @@ function PreferenceRelaxationModal({
     <Modal title="Revisar preferencias" onClose={onClose}>
       <div className="remediation-modal">
         <p>{plan.summary}</p>
-        <PreferenceChecklist title="No me gusta" values={profile.dislikes} selected={removeDislikes} onChange={setRemoveDislikes} />
-        <PreferenceChecklist title="Prohibidos" values={profile.bannedFoods} selected={removeBannedFoods} onChange={setRemoveBannedFoods} />
-        {profile.dislikes.length === 0 && profile.bannedFoods.length === 0 && <p className="muted">Este perfil no tiene dislikes ni prohibidos para relajar.</p>}
+        <PreferenceChecklist title="Evitar" values={profile.dislikes} selected={removeDislikes} onChange={setRemoveDislikes} />
+        <PreferenceChecklist title="No puedo comer" values={profile.bannedFoods} selected={removeBannedFoods} onChange={setRemoveBannedFoods} />
+        {profile.dislikes.length === 0 && profile.bannedFoods.length === 0 && <p className="muted">Este perfil no tiene preferencias ni restricciones para relajar.</p>}
         {error && <p className="form-error">{error}</p>}
         <div className="modal-actions">
           <button className="secondary" type="button" disabled={localBusy !== null || totalSelected === 0} onClick={() => apply(false)}>
@@ -1616,8 +1657,8 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
       </div>
       <div className="preference-lines">
         <p><strong>Me gusta:</strong> {profile.likes.join(', ') || 'Sin datos'}</p>
-        <p><strong>No me gusta:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
-        <p><strong>Prohibidos:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
+        <p><strong>Evitar:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
+        <p><strong>No puedo comer:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
       </div>
       <NutritionSourcesPanel profile={profile} foods={state.mappableFoods} onAction={onAction} />
       <section className="settings-panel">
@@ -1996,6 +2037,7 @@ function jobStatusLabel(status: string): string {
 
 function jobKindLabel(kind: string): string {
   if (kind === 'initial_generation') return 'Primera semana'
+  if (kind === 'recipe_detail_enrichment') return 'Detalles de recetas'
   if (kind === 'weekly_generation') return 'Semana nueva'
   if (kind === 'calorie_adjustment') return 'Reajuste calórico'
   if (kind === 'chat_calorie_target_adjustment') return 'Reajuste calórico desde chat'

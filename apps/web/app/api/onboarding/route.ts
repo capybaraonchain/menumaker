@@ -1,5 +1,5 @@
 import { onboardingSchema } from '@menumaker/core'
-import { createProfileAndFirstMenu } from '@menumaker/db'
+import { createProfileAndFirstMenu, FastInitialGenerationError } from '@menumaker/db'
 import { codexStatus } from '@menumaker/ai'
 import { NextResponse } from 'next/server'
 
@@ -12,6 +12,13 @@ export async function POST(request: Request) {
     const state = await createProfileAndFirstMenu(body)
     return NextResponse.json({ ...state, provider: codexStatus() })
   } catch (error) {
+    if (error instanceof FastInitialGenerationError) {
+      return NextResponse.json({
+        error: error.message,
+        failureCode: error.failureCode,
+        issues: error.issues,
+      }, { status: 400 })
+    }
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Error de onboarding.' }, { status: 400 })
   }
 }

@@ -110,11 +110,12 @@ export async function completeStructured<T>(input: {
   system: string
   user: string
   timeoutMs?: number
+  reasoningEffort?: string
 }): Promise<T> {
   const profile = await resolveFreshProfile()
   const payload = buildCodexPayload({
     model: codexModel(),
-    reasoningEffort: codexReasoningEffort(),
+    reasoningEffort: input.reasoningEffort ?? codexReasoningEffort(),
     system: input.system,
     user: input.user,
     schemaName: input.schemaName,
@@ -124,11 +125,11 @@ export async function completeStructured<T>(input: {
   return JSON.parse(text) as T
 }
 
-export async function completeText(input: { system: string; user: string; timeoutMs?: number }): Promise<string> {
+export async function completeText(input: { system: string; user: string; timeoutMs?: number; reasoningEffort?: string }): Promise<string> {
   const profile = await resolveFreshProfile()
   const payload = buildCodexLoosePayload({
     model: codexModel(),
-    reasoningEffort: codexReasoningEffort(),
+    reasoningEffort: input.reasoningEffort ?? codexReasoningEffort(),
     system: input.system,
     user: input.user,
   })
@@ -443,4 +444,3 @@ function redact(text: string): string {
     .replace(/"(access_token|refresh_token|id_token|access|refresh|OPENAI_API_KEY)"\s*:\s*"[^"]+"/gi, '"$1":"[REDACTED]"')
     .slice(-2000)
 }
-

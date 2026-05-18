@@ -1,11 +1,23 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type postgres from 'postgres'
 import {
   codexStatus,
+  FAST_INITIAL_CANDIDATES_PER_SLOT,
+  FAST_INITIAL_LLM_TIMEOUT_MS,
+  FAST_INITIAL_REASONING_EFFORT,
+  FAST_INITIAL_WEEK_SCHEMA_VERSION,
   generateRecipeCandidates,
+  generateFastInitialWeek,
+  generateRecipeDetails,
   generateWeekSkeleton,
   chatWithMenuContext,
   planChatCommand,
   summarizeGeneration,
+  type FastRecipeIngredientRole,
+  type FastRecipePayload,
+  type FastWeekGenerationInput,
+  type FastWeekGenerationResult,
+  type FastWeekPayload,
   type GenerationSummaryInput,
   type GenerationSummaryResult,
   type PlannedChatCommand,
@@ -49,6 +61,21 @@ import {
   classifyGenerationFailure,
   type GenerationRemediationPlan,
 } from './remediation'
+import {
+  fastAmountRangeForFood,
+  fastCombinationIssue,
+  fastDefaultAmountForFood,
+  fastFamilyForFood,
+  fastFamilyRepeatLimit,
+  fastIngredientBankItem,
+  fastRepeatLimitForFood,
+  fastRoleForFood,
+  fastUnitForFood,
+  preferredFastIngredientName,
+  type FastIngredientRole,
+} from './fastIngredientOntology'
+
+type SqlExecutor = postgres.Sql | postgres.TransactionSql
 
 export interface AppState {
   provider?: unknown
@@ -512,14 +539,15 @@ interface WeekSkeletonTrace {
   error?: string
 }
 
-type WeekRepairIssueReason =
+export type WeekRepairIssueReason =
   | 'repetition_conflict'
   | 'daily_calorie_drift'
   | 'weekly_protein_low'
   | 'banned_item_conflict'
   | 'low_nutrition_confidence'
+  | 'generation_exhausted'
 
-interface WeekRepairIssue {
+export interface WeekRepairIssue {
   reason: WeekRepairIssueReason
   dayIndex?: number
   slot?: MealSlot
@@ -531,7 +559,7 @@ interface WeekQualityConstraints {
   bannedFoods?: string[]
 }
 
-interface WeekRepairAction {
+export interface WeekRepairAction {
   attempt: number
   reason: WeekRepairIssue['reason']
   dayIndex: number
@@ -541,7 +569,7 @@ interface WeekRepairAction {
   delta: NutritionTotals
 }
 
-interface WeekRepairRequest {
+export interface WeekRepairRequest {
   reason: WeekRepairIssue['reason']
   message: string
   attempt: number
@@ -551,7 +579,7 @@ interface WeekRepairRequest {
   title?: string
 }
 
-interface WeekRepairResult {
+export interface WeekRepairResult {
   repaired: boolean
   retry: boolean
   notes: string[]
@@ -562,7 +590,7 @@ interface WeekRepairResult {
   actionCount: number
 }
 
-interface WeekRepairTrace {
+export interface WeekRepairTrace {
   attempted: boolean
   maxAttempts: number
   issuesBefore: WeekRepairIssue[]
@@ -573,11 +601,78 @@ interface WeekRepairTrace {
   repaired: boolean
 }
 
+export interface FastInitialWeekTrace {
+  mode: 'fast_full_week'
+  schemaVersion: typeof FAST_INITIAL_WEEK_SCHEMA_VERSION
+  providerConfigured: boolean
+  providerSource: FastWeekGenerationResult['source']
+  cacheHit: boolean
+  timeoutMs: number
+  reasoningEffort: typeof FAST_INITIAL_REASONING_EFFORT
+  durationMs: number
+  requestedMeals: number
+  requestedReserveMeals: number
+  requestedCandidateMeals: number
+  rawSelectedMealCount: number
+  rawReserveMealCount: number
+  rawCandidateMealCount: number
+  acceptedSelectedMealCount: number
+  acceptedReserveMealCount: number
+  ingredientBankCounts: Record<string, number>
+  ingredientBankHash: string
+  unknownIngredientCount: number
+  hardRestrictionHits: Array<{ dayIndex?: number; slot: MealSlot; title: string; bannedFood: string }>
+  softPreferenceHits: Array<{ dayIndex?: number; slot: MealSlot; title: string; dislikedFood: string }>
+  repair: WeekRepairTrace
+  validationIssues: WeekRepairIssue[]
+  fallbackUsed: false
+}
+
+export interface FastInitialWeekBuildResult {
+  days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>
+  source: 'llm'
+  fallbackSlots: []
+  repair: WeekRepairTrace
+  trace: {
+    mode: 'fast_full_week'
+    fallbackAllowed: false
+    fast: FastInitialWeekTrace
+  }
+}
+
+export class FastInitialGenerationError extends Error {
+  failureCode:
+    | 'provider_unavailable'
+    | 'provider_failed'
+    | 'generation_exhausted'
+    | 'banned_item_conflict'
+    | 'low_nutrition_confidence'
+    | 'repetition_conflict'
+    | 'daily_calorie_drift'
+    | 'weekly_protein_low'
+  issues: WeekRepairIssue[]
+  trace: Partial<FastInitialWeekTrace>
+
+  constructor(input: {
+    message: string
+    failureCode: FastInitialGenerationError['failureCode']
+    issues?: WeekRepairIssue[]
+    trace?: Partial<FastInitialWeekTrace>
+  }) {
+    super(input.message)
+    this.name = 'FastInitialGenerationError'
+    this.failureCode = input.failureCode
+    this.issues = input.issues ?? []
+    this.trace = input.trace ?? {}
+  }
+}
+
 const RECIPE_GENERATION_SCHEMA_VERSION = 'menumaker_recipe_candidates:v1'
 const WEEK_SKELETON_SCHEMA_VERSION = 'menumaker_week_skeleton:v1'
 const CHAT_COMMAND_SCHEMA_VERSION = 'menumaker_chat_command:v1'
 const MENU_CHAT_SCHEMA_VERSION = 'menumaker_menu_chat:v1'
 const GENERATION_SUMMARY_SCHEMA_VERSION = 'menumaker_generation_summary:v1'
+const FAST_INITIAL_TOTAL_BUDGET_MS = 45_000
 
 const replacementSlotShares: Record<MealSlot, number> = {
   breakfast: 0.23,
@@ -644,24 +739,58 @@ export async function createProfileAndFirstMenu(input: OnboardingInput): Promise
   const conflict = impossibleTargetConflict(targets)
   if (conflict.impossible) throw new Error(conflict.messageEs)
 
+  const transientProfile = profileRowFromOnboarding(input, targets, randomUUID())
+  const week = await buildFastInitialWeek(transientProfile, targets)
+
   const sql = sqlClient()
-  const [profile] = await sql<[{ id: string }]>`
-    insert into profiles (
-      user_id, name, locale, unit_system, weight_kg, target_weight_kg, protein_calculation_weight_kg,
-      height_cm, age, sex, activity_level, goal, macro_mode, likes, dislikes, banned_foods
-    )
-    values (
-      ${localUserId()}, ${input.name}, ${input.locale}, 'metric', ${input.weightKg}, ${input.targetWeightKg},
-      ${targets.proteinCalculationWeightKg}, ${input.heightCm}, ${input.age ?? null}, ${input.sex},
-      ${input.activityLevel}, ${input.goal}, ${input.macroMode}, ${sql.json(input.likes as any)},
-      ${sql.json(input.dislikes as any)}, ${sql.json(input.bannedFoods as any)}
-    )
-    returning id
-  `
-  if (!profile) throw new Error('No se pudo crear el perfil.')
-  const targetId = await saveMacroTarget(profile.id, targets)
-  await createWeeklyMenu(profile.id, targetId, targets, 'initial_generation')
-  return getAppState(profile.id)
+  let createdProfileId: string | null = null
+  let detailJobId: string | null = null
+  await sql.begin(async (tx) => {
+    const [profile] = await tx<[{ id: string }]>`
+      insert into profiles (
+        user_id, name, locale, unit_system, weight_kg, target_weight_kg, protein_calculation_weight_kg,
+        height_cm, age, sex, activity_level, goal, macro_mode, likes, dislikes, banned_foods
+      )
+      values (
+        ${localUserId()}, ${input.name}, ${input.locale}, 'metric', ${input.weightKg}, ${input.targetWeightKg},
+        ${targets.proteinCalculationWeightKg}, ${input.heightCm}, ${input.age ?? null}, ${input.sex},
+        ${input.activityLevel}, ${input.goal}, ${input.macroMode}, ${tx.json(input.likes as any)},
+        ${tx.json(input.dislikes as any)}, ${tx.json(input.bannedFoods as any)}
+      )
+      returning id
+    `
+    if (!profile) throw new Error('No se pudo crear el perfil.')
+    createdProfileId = profile.id
+    const targetId = await insertMacroTarget(profile.id, targets, tx)
+    const persistedProfile = { ...transientProfile, id: profile.id }
+    const persisted = await persistFastInitialWeek(profile.id, targetId, persistedProfile, targets, week, tx)
+    detailJobId = persisted.detailJobId
+  })
+  if (!createdProfileId) throw new Error('No se pudo crear el perfil.')
+  if (detailJobId) startRecipeDetailEnrichment(detailJobId)
+  return getAppState(createdProfileId)
+}
+
+function profileRowFromOnboarding(input: OnboardingInput, targets: MacroTargets, id: string): ProfileRow {
+  return {
+    id,
+    name: input.name,
+    locale: input.locale,
+    unitSystem: 'metric',
+    weightKg: input.weightKg,
+    targetWeightKg: input.targetWeightKg,
+    proteinCalculationWeightKg: targets.proteinCalculationWeightKg,
+    heightCm: input.heightCm,
+    age: input.age ?? null,
+    sex: input.sex,
+    activityLevel: input.activityLevel,
+    goal: input.goal,
+    macroMode: input.macroMode,
+    likes: input.likes,
+    dislikes: input.dislikes,
+    bannedFoods: input.bannedFoods,
+    latestTarget: targets,
+  }
 }
 
 export async function updateProfile(profileId: string, input: ProfileUpdateInput): Promise<AppState> {
@@ -1145,8 +1274,8 @@ export async function resetLocalData(expectedPhrase: string, exportBeforeDelete 
   }
 
   await sql.begin(async (tx) => {
-    await tx`delete from pending_actions where user_id = ${localUserId()}`
     await tx`delete from action_events where user_id = ${localUserId()}`
+    await tx`delete from pending_actions where user_id = ${localUserId()}`
     await tx`delete from generation_jobs where user_id = ${localUserId()}`
     await tx`delete from saved_recipes where user_id = ${localUserId()}`
     await tx`delete from profile_preferences where user_id = ${localUserId()}`
@@ -1191,7 +1320,10 @@ export async function getOwnedProfile(profileId: string): Promise<ProfileRow> {
 
 export async function saveMacroTarget(profileId: string, targets: MacroTargets): Promise<string> {
   await getOwnedProfile(profileId)
-  const sql = sqlClient()
+  return insertMacroTarget(profileId, targets)
+}
+
+async function insertMacroTarget(profileId: string, targets: MacroTargets, sql: SqlExecutor = sqlClient()): Promise<string> {
   const [row] = await sql<[{ id: string }]>`
     insert into macro_targets (
       user_id, profile_id, calories, protein_g, carbs_g, fat_g, confidence, formula_version, goal,
@@ -1431,6 +1563,344 @@ export async function runGenerationJob(jobId: string): Promise<WeeklyMenuView> {
   return getWeeklyMenu(menu.id)
 }
 
+async function persistFastInitialWeek(
+  profileId: string,
+  targetId: string,
+  profile: ProfileRow,
+  targets: MacroTargets,
+  week: FastInitialWeekBuildResult,
+  sql: SqlExecutor = sqlClient(),
+): Promise<{ menuId: string; detailJobId: string | null }> {
+  const logs = [
+    'En cola',
+    'Generando semana inicial rápida con LLM',
+    'Validando restricciones y estructura',
+    week.repair.attempted ? 'Reparando selección semanal con reservas LLM' : 'Validando calidad semanal',
+    'Calculando nutrición',
+    'Finalizando',
+  ]
+  const jobInput: WeeklyMenuGenerationJobInput = {
+    profileId,
+    macroTargetId: targetId,
+    target: targets,
+    kind: 'initial_generation',
+  }
+  const [job] = await sql<[{ id: string }]>`
+    insert into generation_jobs (user_id, profile_id, status, kind, logs, result)
+    values (
+      ${localUserId()}, ${profileId}, 'completed', 'initial_generation',
+      ${sql.json(logs as any)},
+      ${sql.json({
+        jobInput,
+        recipeSource: week.source,
+        fallbackSlots: week.fallbackSlots,
+        trace: week.trace,
+        repair: week.repair,
+      } as any)}
+    )
+    returning id
+  `
+  if (!job) throw new Error('No se pudo crear el trabajo de generación inicial.')
+
+  const [menu] = await sql<[{ id: string }]>`
+    insert into weekly_menus (user_id, profile_id, macro_target_id, week_start, locale, status, generation_settings, nutrition_snapshot)
+    values (${localUserId()}, ${profileId}, ${targetId}, ${currentWeekStart()}, ${profile.locale}, 'completed', ${sql.json({
+      kind: 'initial_generation',
+      generationMode: 'fast_full_week',
+      generationJobId: job.id,
+      recipeSource: week.source,
+      fallbackSlots: week.fallbackSlots,
+      fallbackAllowed: false,
+      fallbackUsed: false,
+      fastInitialTrace: week.trace.fast,
+      repair: week.repair,
+      validation: {
+        issuesBeforeRepair: week.repair.issuesBefore,
+        issuesAfterRepair: week.repair.issuesAfter,
+      },
+      prompt: {
+        schemaVersion: FAST_INITIAL_WEEK_SCHEMA_VERSION,
+        ingredientBankCounts: week.trace.fast.ingredientBankCounts,
+        ingredientBankHash: week.trace.fast.ingredientBankHash,
+        fullCatalogAliasesIncluded: false,
+      },
+      timing: {
+        llmTimeoutMs: FAST_INITIAL_LLM_TIMEOUT_MS,
+        totalBudgetMs: FAST_INITIAL_TOTAL_BUDGET_MS,
+        durationMs: week.trace.fast.durationMs,
+      },
+      fastSummary: `Primera semana generada con vía rápida LLM y validación local (${round(week.trace.fast.durationMs / 1000)}s).`,
+    } as any)}, '{}')
+    returning id
+  `
+  if (!menu) throw new Error('No se pudo crear el menú.')
+
+  const dayNutrition: NutritionTotals[] = []
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const [day] = await sql<[{ id: string }]>`
+      insert into day_plans (user_id, weekly_menu_id, day_index, locked)
+      values (${localUserId()}, ${menu.id}, ${dayIndex}, false)
+      returning id
+    `
+    if (!day) throw new Error('No se pudo crear el día.')
+    const dayRecipes = week.days[dayIndex] ?? []
+    for (const item of dayRecipes) {
+      const recipeId = await persistRecipe(item.recipe, 'llm_generated_fast', sql)
+      await sql`
+        insert into menu_meals (user_id, day_plan_id, recipe_id, slot, locked, nutrition_snapshot)
+        values (${localUserId()}, ${day.id}, ${recipeId}, ${item.slot}, false, ${sql.json(item.recipe.nutrition as any)})
+      `
+    }
+    dayNutrition.push(sumNutrition(dayRecipes.map((item) => item.recipe.nutrition)))
+  }
+
+  const weeklyNutrition = sumNutrition(dayNutrition)
+  await sql`
+    update weekly_menus
+    set nutrition_snapshot = ${sql.json(weeklyNutrition as any)}
+    where id = ${menu.id}
+  `
+  await sql`
+    update generation_jobs
+    set weekly_menu_id = ${menu.id},
+      result = coalesce(result, '{}'::jsonb) || ${sql.json({
+        jobInput,
+        menuId: menu.id,
+        weeklyNutrition,
+        recipeSource: week.source,
+        fallbackSlots: week.fallbackSlots,
+        trace: week.trace,
+        repair: week.repair,
+      } as any)}::jsonb,
+      updated_at = now()
+    where id = ${job.id} and user_id = ${localUserId()}
+  `
+  const detailJob = await enqueueRecipeDetailEnrichmentJob(profileId, menu.id, sql)
+  await sql`
+    update weekly_menus
+    set generation_settings = generation_settings || ${sql.json({
+      detailEnrichment: {
+        jobId: detailJob.id,
+        status: 'queued',
+        queuedAt: new Date().toISOString(),
+      },
+    } as any)}::jsonb
+    where id = ${menu.id} and user_id = ${localUserId()}
+  `
+  return { menuId: menu.id, detailJobId: detailJob.id }
+}
+
+async function enqueueRecipeDetailEnrichmentJob(profileId: string, menuId: string, sql: SqlExecutor = sqlClient()): Promise<{ id: string }> {
+  const [job] = await sql<[{ id: string }]>`
+    insert into generation_jobs (user_id, profile_id, weekly_menu_id, status, kind, logs, result)
+    values (
+      ${localUserId()}, ${profileId}, ${menuId}, 'queued', 'recipe_detail_enrichment',
+      ${sql.json(['En cola', 'Detalles culinarios pendientes'] as any)},
+      ${sql.json({ detailInput: { profileId, menuId } } as any)}
+    )
+    returning id
+  `
+  if (!job) throw new Error('No se pudo crear el trabajo de detalle de recetas.')
+  return job
+}
+
+function startRecipeDetailEnrichment(jobId: string): void {
+  setTimeout(() => {
+    void runRecipeDetailEnrichmentJob(jobId).catch((error) => {
+      console.error('Recipe detail enrichment failed', error)
+    })
+  }, 0)
+}
+
+export async function runRecipeDetailEnrichmentJob(jobId: string): Promise<GenerationJobView> {
+  const sql = sqlClient()
+  const [job] = await sql`
+    select id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    from generation_jobs
+    where id = ${jobId} and user_id = ${localUserId()}
+  `
+  if (!job) throw new Error('Trabajo de detalle no encontrado.')
+  if (job.kind !== 'recipe_detail_enrichment') throw new Error('Este trabajo no es de detalle de recetas.')
+  if (job.status === 'cancelled') throw new Error('Este trabajo fue cancelado.')
+  if (job.status === 'completed') return generationJobFromRow(job)
+  if (job.status !== 'queued' && job.status !== 'failed') throw new Error(`No se puede ejecutar un trabajo en estado ${job.status}.`)
+
+  const detailInput = detailEnrichmentInputFromResult(job.result)
+  const [claimed] = await sql`
+    update generation_jobs
+    set status = 'running',
+      logs = ${sql.json(['En cola', 'Generando detalles culinarios'] as any)},
+      error = null,
+      failure_code = null,
+      updated_at = now()
+    where id = ${jobId} and user_id = ${localUserId()} and status in ('queued', 'failed')
+    returning id
+  `
+  if (!claimed) throw new Error('No se pudo reclamar el trabajo de detalle.')
+
+  try {
+    const menu = await getWeeklyMenu(detailInput.menuId)
+    const recipes = uniqueRecipesForDetailEnrichment(menu)
+    const result = await generateRecipeDetails({
+      locale: menu.locale,
+      recipes: recipes.map((recipe) => ({
+        recipeId: recipe.id,
+        title: recipe.title,
+        ingredients: recipe.ingredients.map((ingredient) => ({
+          name: ingredient.name,
+          amount: ingredient.amount,
+          unit: ingredient.unit,
+        })),
+      })),
+    })
+    const detailById = result.source === 'llm'
+      ? new Map(result.details.map((detail) => [detail.recipeId, detail]))
+      : new Map<string, typeof result.details[number]>()
+    const nutritionCatalog = await nutritionCatalogForScoring()
+    let enrichedRecipeCount = 0
+    let llmDetailCount = 0
+    let fallbackDetailCount = 0
+    for (const recipe of recipes) {
+      const llmDetail = detailById.get(recipe.id)
+      const detail = llmDetail && recipeDetailMatchesLockedIngredients(recipe, llmDetail, nutritionCatalog)
+        ? llmDetail
+        : fallbackRecipeDetail(recipe)
+      await sql`
+        update recipes
+        set description = ${detail.description},
+          prep_time_minutes = ${detail.prepTimeMinutes},
+          cuisine = ${detail.cuisine},
+          flavor_profile = ${detail.flavorProfile},
+          tags = ${sql.json(detail.tags as any)},
+          steps = ${sql.json(detail.steps as any)}
+        where id = ${recipe.id} and user_id = ${localUserId()}
+      `
+      enrichedRecipeCount += 1
+      if (detail === llmDetail) llmDetailCount += 1
+      else fallbackDetailCount += 1
+    }
+    const completedLogs = ['En cola', 'Generando detalles culinarios', 'Detalles guardados']
+    await sql`
+      update weekly_menus
+      set generation_settings = generation_settings || ${sql.json({
+        detailEnrichment: {
+          jobId,
+          status: 'completed',
+          requestedRecipeCount: recipes.length,
+          enrichedRecipeCount,
+          llmDetailCount,
+          fallbackDetailCount,
+          completedAt: new Date().toISOString(),
+          trace: result.trace,
+        },
+      } as any)}::jsonb
+      where id = ${menu.id} and user_id = ${localUserId()}
+    `
+    const [updated] = await sql`
+      update generation_jobs
+      set status = 'completed',
+        logs = ${sql.json(completedLogs as any)},
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({
+          detailInput,
+          requestedRecipeCount: recipes.length,
+          enrichedRecipeCount,
+          llmDetailCount,
+          fallbackDetailCount,
+          providerSource: result.source,
+          trace: result.trace,
+        } as any)}::jsonb,
+        error = null,
+        updated_at = now()
+      where id = ${jobId} and user_id = ${localUserId()}
+      returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    `
+    return generationJobFromRow(updated)
+  } catch (error) {
+    const logs = ['En cola', 'Generando detalles culinarios', 'Fallo de detalle']
+    await sql`
+      update weekly_menus
+      set generation_settings = generation_settings || ${sql.json({
+        detailEnrichment: {
+          jobId,
+          status: 'failed',
+          error: error instanceof Error ? error.message : String(error),
+          failedAt: new Date().toISOString(),
+        },
+      } as any)}::jsonb
+      where id = ${detailInput.menuId} and user_id = ${localUserId()}
+    `
+    const [updated] = await sql`
+      update generation_jobs
+      set status = 'failed',
+        failure_code = 'detail_enrichment_failed',
+        logs = ${sql.json(logs as any)},
+        result = coalesce(result, '{}'::jsonb) || ${sql.json({ detailInput } as any)}::jsonb,
+        error = ${error instanceof Error ? error.message : String(error)},
+        updated_at = now()
+      where id = ${jobId} and user_id = ${localUserId()}
+      returning id, profile_id, weekly_menu_id, status, kind, failure_code, logs, result, error, retry_count, created_at, updated_at
+    `
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { job: generationJobFromRow(updated) })
+  }
+}
+
+function detailEnrichmentInputFromResult(result: unknown): { profileId: string; menuId: string } {
+  const input = result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as { detailInput?: { profileId?: unknown; menuId?: unknown } }).detailInput
+    : null
+  if (!input || typeof input.profileId !== 'string' || typeof input.menuId !== 'string') {
+    throw new Error('El trabajo no contiene input de detalle de recetas.')
+  }
+  return { profileId: input.profileId, menuId: input.menuId }
+}
+
+function uniqueRecipesForDetailEnrichment(menu: WeeklyMenuView): RecipeView[] {
+  const recipes = new Map<string, RecipeView>()
+  for (const meal of menu.days.flatMap((day) => day.meals)) {
+    if (!recipes.has(meal.recipe.id)) recipes.set(meal.recipe.id, meal.recipe)
+  }
+  return [...recipes.values()]
+}
+
+function fallbackRecipeDetail(recipe: RecipeView): {
+  description: string
+  prepTimeMinutes: number
+  cuisine: string
+  flavorProfile: string
+  tags: string[]
+  steps: string[]
+} {
+  const ingredientNames = recipe.ingredients.slice(0, 3).map((ingredient) => ingredient.name).join(', ')
+  return {
+    description: `${recipe.title} con ${ingredientNames}, ajustado a las cantidades del menú.`,
+    prepTimeMinutes: Math.max(3, Math.min(90, Math.round(recipe.prepTimeMinutes || 20))),
+    cuisine: recipe.cuisine && recipe.cuisine !== 'pendiente' ? recipe.cuisine : 'casera',
+    flavorProfile: recipe.flavorProfile && recipe.flavorProfile !== 'validado localmente' ? recipe.flavorProfile : 'equilibrado',
+    tags: ['casera', 'validada', 'menú semanal'],
+    steps: [
+      'Pesar los ingredientes según las cantidades indicadas.',
+      'Cocinar por separado los ingredientes que lo necesiten hasta que estén listos.',
+      'Montar el plato y servir al momento.',
+    ],
+  }
+}
+
+function recipeDetailMatchesLockedIngredients(recipe: RecipeView, detail: { description: string; tags: string[]; steps: string[] }, nutritionCatalog: NutritionFood[]): boolean {
+  const text = normalizeIngredientName([
+    detail.description,
+    ...detail.tags,
+    ...detail.steps,
+  ].join(' '))
+  const recipeFoodIds = new Set(recipe.ingredients.map((ingredient) => findNutritionFoodByName(ingredient.name, nutritionCatalog)?.id).filter(Boolean))
+  for (const food of nutritionCatalog) {
+    const aliases = [food.canonicalName, ...food.aliases]
+      .map(normalizeIngredientName)
+      .filter((alias) => alias.length >= 4 && !fastGenericTitleTerms.has(alias))
+    if (aliases.some((alias) => text.includes(alias)) && !recipeFoodIds.has(food.id)) return false
+  }
+  return true
+}
+
 export async function enqueuePreviewGenerationJob(input: PreviewGenerationJobInput): Promise<GenerationJobView> {
   const sql = sqlClient()
   await assertPreviewJobInput(input)
@@ -1532,7 +2002,9 @@ export async function runQueuedGenerationJobs(limit = 1, profileId?: string): Pr
   for (const row of rows) {
     result.processed += 1
     try {
-      if (String(row.kind).startsWith('preview_')) {
+      if (row.kind === 'recipe_detail_enrichment') {
+        await runRecipeDetailEnrichmentJob(row.id)
+      } else if (String(row.kind).startsWith('preview_')) {
         await runPreviewGenerationJob(row.id)
       } else {
         await runGenerationJob(row.id)
@@ -2500,6 +2972,1599 @@ function regenerationGenerationSettings(plan: RegenerationPlan, plannedWeeklyNut
   }
 }
 
+export async function buildFastInitialWeek(
+  profile: ProfileRow,
+  targets: MacroTargets,
+  deps: {
+    generateFastInitialWeek?: typeof generateFastInitialWeek
+    now?: () => number
+    nutritionCatalog?: NutritionFood[]
+    ingredientMappings?: IngredientAliasMapping[]
+  } = {},
+): Promise<FastInitialWeekBuildResult> {
+  const now = deps.now ?? Date.now
+  const startedAt = now()
+  const nutritionCatalog = deps.nutritionCatalog ?? await nutritionCatalogForScoring()
+  const ingredientMappings = deps.ingredientMappings ?? await ingredientMappingsForUser()
+  const hardRestrictionTerms = expandedFoodTerms(profile.bannedFoods, nutritionCatalog)
+  const softPreferenceTerms = expandedFoodTerms(profile.dislikes, nutritionCatalog)
+  const ingredientBank = buildFastIngredientBank(nutritionCatalog, profile)
+  const ingredientBankHash = hashStableJson(ingredientBank)
+  const generationInput: FastWeekGenerationInput = {
+    locale: profile.locale,
+    mealSlots,
+    target: {
+      calories: targets.calories,
+      proteinG: targets.proteinG,
+      carbsG: targets.carbsG,
+      fatG: targets.fatG,
+      goal: targets.goal,
+      macroMode: targets.macroMode,
+    },
+    likes: profile.likes,
+    dislikes: profile.dislikes,
+    bannedFoods: profile.bannedFoods,
+    ingredientBank,
+    maxPrepTimeMinutes: 120,
+  }
+  const generator = deps.generateFastInitialWeek ?? generateFastInitialWeekCached
+  const result = await generator(generationInput)
+  const baseTrace: FastInitialWeekTrace = {
+    mode: 'fast_full_week',
+    schemaVersion: FAST_INITIAL_WEEK_SCHEMA_VERSION,
+    providerConfigured: result.providerConfigured,
+    providerSource: result.source,
+    cacheHit: Boolean(result.cacheHit),
+    timeoutMs: FAST_INITIAL_LLM_TIMEOUT_MS,
+    reasoningEffort: FAST_INITIAL_REASONING_EFFORT,
+    durationMs: Math.max(0, now() - startedAt),
+    requestedMeals: 28,
+    requestedReserveMeals: 0,
+    requestedCandidateMeals: mealSlots.length * FAST_INITIAL_CANDIDATES_PER_SLOT,
+    rawSelectedMealCount: 0,
+    rawReserveMealCount: 0,
+    rawCandidateMealCount: result.draft?.candidates?.length ?? 0,
+    acceptedSelectedMealCount: 0,
+    acceptedReserveMealCount: 0,
+    ingredientBankCounts: Object.fromEntries(Object.entries(ingredientBank).map(([key, values]) => [key, values.length])),
+    ingredientBankHash,
+    unknownIngredientCount: 0,
+    hardRestrictionHits: [],
+    softPreferenceHits: [],
+    repair: emptyRepairTrace(),
+    validationIssues: [],
+    fallbackUsed: false,
+  }
+
+  if (!result.providerConfigured || result.source === 'unavailable') {
+    throw new FastInitialGenerationError({
+      message: 'No se pudo generar la primera semana: el proveedor LLM no está configurado. No se ha creado ningún menú.',
+      failureCode: 'provider_unavailable',
+      trace: baseTrace,
+    })
+  }
+  if (result.source !== 'llm' || !result.draft) {
+    throw new FastInitialGenerationError({
+      message: 'No se pudo generar una primera semana válida dentro del presupuesto de 45 segundos. No se usó fallback.',
+      failureCode: 'provider_failed',
+      trace: { ...baseTrace, durationMs: Math.max(0, now() - startedAt) },
+    })
+  }
+
+  const structuralIssue = validateFastWeekStructure(result.draft)
+  if (structuralIssue) {
+    throw new FastInitialGenerationError({
+      message: 'El proveedor devolvió una semana incompleta o inválida. No se ha guardado el perfil.',
+      failureCode: 'generation_exhausted',
+      issues: [structuralIssue],
+      trace: { ...baseTrace, validationIssues: [structuralIssue], durationMs: Math.max(0, now() - startedAt) },
+    })
+  }
+
+  let unknownIngredientCount = 0
+  const reservePools = new Map<MealSlot, RecipePoolResult>()
+  const reserveCandidatesBySlot = new Map<MealSlot, GeneratedScoredRecipe[]>()
+  for (const slot of mealSlots) {
+    const titleSet = new Set<string>()
+    const recipes: GeneratedScoredRecipe[] = []
+    const rawCandidates = result.draft.candidates.filter((item) => item.slot === slot)
+    for (const candidate of rawCandidates) {
+      const scored = scoreFastRecipe({
+        recipe: candidate.recipe,
+        locale: profile.locale,
+        slot,
+        titleSet,
+        hardRestrictionTerms,
+        softPreferenceTerms,
+        targetNutrition: targetNutritionForSlot(targets, slot),
+        ingredientMappings,
+        nutritionCatalog,
+        trace: baseTrace,
+      })
+      if (!scored) unknownIngredientCount += 1
+      else {
+        recipes.push({ recipe: scored.recipe, source: 'llm' as const })
+      }
+    }
+    recipes.sort((left, right) => recipeFitScore(right.recipe.nutrition, targetNutritionForSlot(targets, slot)) - recipeFitScore(left.recipe.nutrition, targetNutritionForSlot(targets, slot)))
+    reserveCandidatesBySlot.set(slot, recipes)
+    reservePools.set(slot, {
+      recipes,
+      source: 'llm',
+      llmResult: {
+        providerConfigured: result.providerConfigured,
+        source: result.source,
+        recipes: [],
+        cacheHit: result.cacheHit,
+        error: result.error,
+      },
+      trace: {
+        requestedCount: recipes.length,
+        providerConfigured: result.providerConfigured,
+        providerSource: result.source,
+        cacheHit: Boolean(result.cacheHit),
+        llmRawCandidateCount: recipes.length,
+        acceptedLlmCandidateCount: recipes.length,
+        fallbackAllowed: false,
+        fallbackUsed: false,
+        fallbackReason: 'none',
+        fallbackCandidateCount: 0,
+        returnedCandidateCount: recipes.length,
+        error: result.error,
+      },
+    })
+  }
+
+  let days: FastInitialWeekBuildResult['days'] = Array.from({ length: 7 }, () => [])
+  const usedInitialTitles = new Set<string>()
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    for (const slot of mealSlots) {
+      const candidate = (reserveCandidatesBySlot.get(slot) ?? [])
+        .find((item) => !usedInitialTitles.has(normalizeIngredientName(item.recipe.title)))
+      if (!candidate) continue
+      usedInitialTitles.add(normalizeIngredientName(candidate.recipe.title))
+      days[dayIndex]!.push({ slot, recipe: candidate.recipe })
+    }
+  }
+  for (const day of days) {
+    day.sort((left, right) => mealSlots.indexOf(left.slot) - mealSlots.indexOf(right.slot))
+  }
+  days = optimizeFastWeekSelection(days, reserveCandidatesBySlot, targets, nutritionCatalog)
+
+  baseTrace.acceptedSelectedMealCount = days.reduce((total, day) => total + day.length, 0)
+  baseTrace.acceptedReserveMealCount = 0
+  baseTrace.unknownIngredientCount = unknownIngredientCount
+  if (baseTrace.hardRestrictionHits.length > 0) {
+    const hit = baseTrace.hardRestrictionHits[0]!
+    throw new FastInitialGenerationError({
+      message: `El menú generado contenía un alimento de “No puedo comer”: ${hit.bannedFood}. Rechazado antes de guardar.`,
+      failureCode: 'banned_item_conflict',
+      issues: [{
+        reason: 'banned_item_conflict',
+        dayIndex: hit.dayIndex,
+        slot: hit.slot,
+        title: hit.title,
+        message: `${hit.title} contiene alimento prohibido: ${hit.bannedFood}.`,
+      }],
+      trace: { ...baseTrace, durationMs: Math.max(0, now() - startedAt) },
+    })
+  }
+  const selectedCountIssue = assertSelectedMealCount(days)
+  if (selectedCountIssue) {
+    throw new FastInitialGenerationError({
+      message: 'El proveedor devolvió una semana incompleta o inválida. No se ha guardado el perfil.',
+      failureCode: fastFailureCode(selectedCountIssue),
+      issues: [selectedCountIssue],
+      trace: { ...baseTrace, validationIssues: [selectedCountIssue], durationMs: Math.max(0, now() - startedAt) },
+    })
+  }
+  const repair = repairWeekRecipeSelection(days, reservePools, targets, { bannedFoods: hardRestrictionTerms })
+  baseTrace.repair = repair
+  baseTrace.validationIssues = repair.issuesAfter
+  baseTrace.durationMs = Math.max(0, now() - startedAt)
+  if (repair.issuesAfter.length > 0) {
+    const issue = repair.issuesAfter[0]!
+    throw new FastInitialGenerationError({
+      message: fastValidationMessage(issue),
+      failureCode: fastFailureCode(issue),
+      issues: repair.issuesAfter,
+      trace: baseTrace,
+    })
+  }
+  days = trimFastOptionalRepeatedIngredients(days, targets, nutritionCatalog)
+  days = topUpFastWeeklyMacros(days, targets, nutritionCatalog)
+  const handoutRepair = repairFastHandoutQualitySelection(days, reserveCandidatesBySlot, targets, nutritionCatalog)
+  if (handoutRepair.actions.length > 0) {
+    days = handoutRepair.days
+    repair.attempted = true
+    repair.actions.push(...handoutRepair.actions)
+    repair.repairRequests.push(...handoutRepair.requests)
+    repair.repairResults.push(...handoutRepair.results)
+    repair.issuesAfter = handoutRepair.issuesAfter
+    repair.repaired = handoutRepair.issuesAfter.length === 0
+    baseTrace.repair = repair
+  }
+
+  const handoutIssues = evaluateFastHandoutQuality(days, targets, nutritionCatalog)
+  if (handoutIssues.length > 0) {
+    const issue = handoutIssues[0]!
+    baseTrace.validationIssues = handoutIssues
+    throw new FastInitialGenerationError({
+      message: fastValidationMessage(issue),
+      failureCode: fastFailureCode(issue),
+      issues: handoutIssues,
+      trace: baseTrace,
+    })
+  }
+
+  return {
+    days,
+    source: 'llm',
+    fallbackSlots: [],
+    repair,
+    trace: {
+      mode: 'fast_full_week',
+      fallbackAllowed: false,
+      fast: baseTrace,
+    },
+  }
+}
+
+async function generateFastInitialWeekCached(input: FastWeekGenerationInput): Promise<FastWeekGenerationResult> {
+  const result = await generateFastInitialWeek(input)
+  return { ...result, cacheHit: false }
+}
+
+export function buildFastIngredientBank(
+  catalog: NutritionFood[],
+  profile: Pick<ProfileRow, 'likes' | 'dislikes' | 'bannedFoods' | 'locale'>,
+): FastWeekGenerationInput['ingredientBank'] {
+  const banned = expandedFoodTerms(profile.bannedFoods, catalog)
+  const liked = expandedFoodTerms(profile.likes, catalog)
+  const likedNames = new Set(liked.map(normalizeIngredientName))
+  let total = 0
+  const buckets: FastWeekGenerationInput['ingredientBank'] = {
+    protein: [],
+    carb: [],
+    main_veg: [],
+    fruit: [],
+    fat: [],
+    aromatic: [],
+  }
+  const sorted = [...catalog].sort((left, right) => {
+    const leftLiked = foodMatchesAny(left, liked) ? 1 : 0
+    const rightLiked = foodMatchesAny(right, liked) ? 1 : 0
+    const leftPriority = fastBankPriorityFoodIds.has(left.id) ? 1 : 0
+    const rightPriority = fastBankPriorityFoodIds.has(right.id) ? 1 : 0
+    const leftSeed = left.source === 'seed' ? 1 : 0
+    const rightSeed = right.source === 'seed' ? 1 : 0
+    return rightLiked - leftLiked || rightPriority - leftPriority || rightSeed - leftSeed || left.canonicalName.localeCompare(right.canonicalName)
+  })
+  for (const food of sorted) {
+    if (foodMatchesAny(food, banned)) continue
+    const item = fastIngredientBankItem(food, profile.locale)
+    if (!item) continue
+    const bucket = item.role
+    const likedFood = foodMatchesAny(food, liked)
+    if (!likedFood && item.label.length > 48) continue
+    const bucketItems = buckets[bucket]
+    if (!bucketItems || !item.label || bucketItems.some((existing) => existing.id === item.id)) continue
+    if (bucketItems.length >= fastIngredientBucketLimit(bucket)) continue
+    if (total >= 72 && !likedNames.has(normalizeIngredientName(item.label))) continue
+    bucketItems.push(item)
+    total += 1
+  }
+  return Object.fromEntries(Object.entries(buckets).filter(([, values]) => values.length > 0))
+}
+
+const fastBankPriorityFoodIds = new Set([
+  'couscous_cooked',
+  'bulgur_cooked',
+  'whole_wheat_tortilla',
+  'corn',
+  'peas',
+  'black_beans_cooked',
+  'granola',
+  'muesli',
+  'rice_cakes',
+  'raisins',
+  'dates',
+  'honey',
+  'jam',
+  'walnuts',
+  'cashews',
+  'chia_seeds',
+  'tahini',
+  'hummus',
+])
+
+function scoreFastRecipe(input: {
+  recipe: FastRecipePayload
+  locale: Locale
+  dayIndex?: number
+  slot: MealSlot
+  titleSet: Set<string>
+  hardRestrictionTerms: string[]
+  softPreferenceTerms: string[]
+  targetNutrition: NutritionTotals
+  ingredientMappings: IngredientAliasMapping[]
+  nutritionCatalog: NutritionFood[]
+  trace: FastInitialWeekTrace
+}): GeneratedScoredRecipe | null {
+  if (!fastRecipePayloadPassesRoleContract(input.recipe, input.slot, input.nutritionCatalog)) return null
+  const candidate = fastRecipeCandidate(input.recipe, input.locale, input.slot, input.nutritionCatalog)
+  const title = normalizeIngredientName(candidate.title)
+  if (!title || input.titleSet.has(title)) return null
+  if (candidate.ingredients.length < 2) return null
+  if (!fastRecipeHasPlausibleStructure(candidate, input.slot, input.nutritionCatalog)) return null
+  if (fastRecipeHasTitleIngredientConflict(candidate, input.nutritionCatalog)) return null
+  if (fastRecipeHasBadPairing(candidate, input.nutritionCatalog, input.slot)) return null
+  const hardHits = recipeTextMatches(candidate, input.hardRestrictionTerms)
+  for (const bannedFood of hardHits) {
+    input.trace.hardRestrictionHits.push({
+      dayIndex: input.dayIndex,
+      slot: input.slot,
+      title: candidate.title,
+      bannedFood,
+    })
+  }
+  const softHits = recipeTextMatches(candidate, input.softPreferenceTerms)
+  for (const dislikedFood of softHits) {
+    input.trace.softPreferenceHits.push({
+      dayIndex: input.dayIndex,
+      slot: input.slot,
+      title: candidate.title,
+      dislikedFood,
+    })
+  }
+  if (hardHits.length > 0) return null
+  const scored = scoreGeneratedCandidates({
+    candidates: [candidate],
+    avoidedFoods: input.hardRestrictionTerms,
+    avoidTitles: [],
+    targetNutrition: input.targetNutrition,
+    source: 'llm',
+    limit: 1,
+    ingredientMappings: input.ingredientMappings,
+    nutritionCatalog: input.nutritionCatalog,
+  })[0]
+  if (!scored) return null
+  const rebalanced = rebalanceFastRecipe(scored.recipe, input.slot, input.targetNutrition, input.nutritionCatalog)
+  if (!fastScaledAmountsWithinRanges(rebalanced, input.slot, input.nutritionCatalog)) return null
+  if (!fastRecipeWithinSlotCalories(rebalanced, input.targetNutrition)) return null
+  input.titleSet.add(title)
+  return { ...scored, recipe: rebalanced }
+}
+
+function rebalanceFastRecipe(
+  recipe: ReturnType<typeof scoreRecipe>,
+  slot: MealSlot,
+  targetNutrition: NutritionTotals,
+  nutritionCatalog: NutritionFood[],
+): ReturnType<typeof scoreRecipe> {
+  let best = scoreRecipe(scoredRecipeToCandidate(recipe), [], nutritionCatalog)
+  let bestDistance = fastMacroDistance(best.nutrition, targetNutrition)
+
+  for (let iteration = 0; iteration < 8; iteration += 1) {
+    let improved = false
+    for (let index = 0; index < best.ingredients.length; index += 1) {
+      const ingredient = best.ingredients[index]!
+      const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+      if (!food) continue
+      const role = fastIngredientRole(ingredient.name, nutritionCatalog)
+      if (role === 'aromatic' || role === 'other') continue
+      const range = fastAmountRangeForFood(food, slot)
+      for (const amount of fastIngredientAdjustmentValues(ingredient.amount, range, role, best.nutrition, targetNutrition)) {
+        if (Math.abs(amount - ingredient.amount) < 1) continue
+        const candidate = scoredRecipeToCandidate(best)
+        candidate.ingredients[index] = { ...candidate.ingredients[index]!, amount }
+        const scored = scoreRecipe(candidate, [], nutritionCatalog)
+        if (hasUnknownIngredients(scored) || !fastScaledAmountsWithinRanges(scored, slot, nutritionCatalog)) continue
+        const distance = fastMacroDistance(scored.nutrition, targetNutrition)
+        if (distance + 0.05 >= bestDistance) continue
+        best = scored
+        bestDistance = distance
+        improved = true
+      }
+    }
+    if (!improved) break
+  }
+
+  return best
+}
+
+function scoredRecipeToCandidate(recipe: ReturnType<typeof scoreRecipe>): RecipeCandidate {
+  return {
+    title: recipe.title,
+    locale: recipe.locale,
+    description: recipe.description,
+    servings: 1,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cuisine: recipe.cuisine,
+    flavorProfile: recipe.flavorProfile,
+    tags: [...recipe.tags],
+    ingredients: recipe.ingredients.map((ingredient) => ({
+      name: ingredient.name,
+      amount: ingredient.amount,
+      unit: ingredient.unit,
+      preparation: ingredient.preparation ?? undefined,
+    })),
+    steps: [...recipe.steps],
+  }
+}
+
+function fastIngredientAdjustmentValues(
+  currentAmount: number,
+  range: { min: number; max: number },
+  role: FastIngredientRole,
+  currentNutrition: NutritionTotals,
+  targetNutrition: NutritionTotals,
+): number[] {
+  const values = new Set<number>()
+  const add = (amount: number) => values.add(fastRoundedAmount(clamp(amount, range.min, range.max)))
+  add(range.min)
+  add(range.max)
+  add((range.min + range.max) / 2)
+  for (const factor of [0.65, 0.8, 0.9, 1.1, 1.22, 1.4]) add(currentAmount * factor)
+  if ((role === 'protein' || role === 'mixed') && currentNutrition.proteinG > targetNutrition.proteinG * 1.1) {
+    add(range.min)
+    add(currentAmount * 0.72)
+  }
+  if ((role === 'carb' || role === 'fruit' || role === 'main_veg' || role === 'mixed') && currentNutrition.carbsG < targetNutrition.carbsG * 0.92) {
+    add(range.max)
+    add(currentAmount * 1.55)
+  }
+  if (role === 'fat' && currentNutrition.fatG > targetNutrition.fatG * 1.12) {
+    add(range.min)
+    add(currentAmount * 0.7)
+  }
+  if (currentNutrition.calories < targetNutrition.calories * 0.94 && (role === 'carb' || role === 'fruit' || role === 'fat' || role === 'mixed')) {
+    add(range.max)
+    add(currentAmount * 1.35)
+  }
+  if (currentNutrition.calories > targetNutrition.calories * 1.06 && role !== 'main_veg' && role !== 'fruit') {
+    add(range.min)
+    add(currentAmount * 0.78)
+  }
+  return [...values].sort((left, right) => Math.abs(left - currentAmount) - Math.abs(right - currentAmount))
+}
+
+function fastMacroDistance(nutrition: NutritionTotals, target: NutritionTotals): number {
+  const calories = Math.abs(nutrition.calories - target.calories) / Math.max(target.calories, 1) * 70
+  const protein = Math.abs(nutrition.proteinG - target.proteinG) / Math.max(target.proteinG, 1) * 58
+  const carbs = Math.abs(nutrition.carbsG - target.carbsG) / Math.max(target.carbsG, 1) * 54
+  const fat = Math.abs(nutrition.fatG - target.fatG) / Math.max(target.fatG, 1) * 46
+  const excessProtein = Math.max(0, nutrition.proteinG - target.proteinG * 1.18) / Math.max(target.proteinG, 1) * 75
+  const excessFat = Math.max(0, nutrition.fatG - target.fatG * 1.24) / Math.max(target.fatG, 1) * 65
+  const lowCarbs = Math.max(0, target.carbsG * 0.84 - nutrition.carbsG) / Math.max(target.carbsG, 1) * 75
+  return calories + protein + carbs + fat + excessProtein + excessFat + lowCarbs
+}
+
+function fastRoundedAmount(value: number): number {
+  return Math.max(1, Math.round(value))
+}
+
+function fastRecipeCandidate(recipe: FastRecipePayload, locale: Locale, slot: MealSlot, nutritionCatalog: NutritionFood[]): RecipeCandidate {
+  const candidate: RecipeCandidate = {
+    title: typeof recipe.titleHint === 'string' && recipe.titleHint.trim() ? recipe.titleHint.trim() : slotLabel(slot),
+    locale,
+    description: compactRecipeDescription(typeof recipe.titleHint === 'string' ? recipe.titleHint : slotLabel(slot), slot, locale),
+    servings: 1,
+    prepTimeMinutes: defaultPrepTimeForSlot(slot),
+    cuisine: 'pendiente',
+    flavorProfile: 'validado localmente',
+    tags: ['detalle pendiente'],
+    ingredients: fastRecipePayloadIngredients(recipe)
+      .slice(0, 5)
+      .map((ingredient) => fastIngredientWithAmount(ingredient, locale, slot, nutritionCatalog))
+      .filter((ingredient) => ingredient.name.length > 0),
+    steps: compactRecipeSteps(slot, locale),
+  }
+  candidate.title = fastTitleFromIngredients(scoreRecipe(candidate, [], nutritionCatalog), slot, nutritionCatalog)
+  candidate.description = compactRecipeDescription(candidate.title, slot, locale)
+  return candidate
+}
+
+function fastIngredientWithAmount(ingredient: { name: string; role: FastRecipeIngredientRole }, locale: Locale, slot: MealSlot, nutritionCatalog: NutritionFood[]): RecipeCandidate['ingredients'][number] {
+  const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+  const role = food ? effectiveFastIngredientRole(food, ingredient.role) : 'other'
+  const normalized = normalizeIngredientName(ingredient.name)
+  const canonicalName = food ? preferredIngredientName(food, locale) : ingredient.name.trim()
+  const unit = food ? fastUnitForFood(food) : fastIngredientUnit(normalized)
+  return {
+    name: canonicalName,
+    amount: food ? fastDefaultAmountForFood(food, slot) : defaultFastIngredientAmount(role, slot, normalized),
+    unit,
+    preparation: ingredient.role,
+  }
+}
+
+function findNutritionFoodByName(name: string, nutritionCatalog: NutritionFood[]): NutritionFood | null {
+  const normalized = normalizeIngredientName(name)
+  if (!normalized) return null
+  const byId = nutritionCatalog.find((food) => normalizeIngredientName(food.id) === normalized)
+  if (byId) return byId
+  const exact = nutritionCatalog.find((food) => {
+    const names = [food.canonicalName, ...food.aliases].map(normalizeIngredientName)
+    return names.some((candidate) => candidate === normalized)
+  })
+  if (exact) return exact
+  return nutritionCatalog.find((food) => {
+    const names = [food.canonicalName, ...food.aliases].map(normalizeIngredientName)
+    return names.some((candidate) => candidate.includes(normalized) || normalized.includes(candidate))
+  }) ?? null
+}
+
+function fastRecipePayloadIngredients(recipe: FastRecipePayload): Array<{ name: string; role: FastRecipeIngredientRole }> {
+  if (!Array.isArray(recipe.ingredients)) return []
+  return (recipe.ingredients as unknown[])
+    .map((ingredient) => {
+      if (typeof ingredient === 'string') return { name: ingredient.trim(), role: 'protein' as FastRecipeIngredientRole }
+      if (!ingredient || typeof ingredient !== 'object') return { name: '', role: 'protein' as FastRecipeIngredientRole }
+      const current = ingredient as { name?: unknown; ingredientId?: unknown; role?: unknown }
+      return {
+        name: String(current.ingredientId ?? current.name ?? '').trim(),
+        role: fastAllowedIngredientRoles.includes(current.role as FastRecipeIngredientRole) ? current.role as FastRecipeIngredientRole : 'protein',
+      }
+    })
+    .filter((ingredient) => ingredient.name.length > 0)
+}
+
+const fastAllowedIngredientRoles: FastRecipeIngredientRole[] = ['protein', 'carb', 'main_veg', 'fruit', 'fat', 'aromatic']
+
+function fastRecipePayloadPassesRoleContract(recipe: FastRecipePayload, slot: MealSlot, nutritionCatalog: NutritionFood[]): boolean {
+  const ingredients = fastRecipePayloadIngredients(recipe)
+  if (ingredients.length < 2 || ingredients.length > 5) return false
+  const normalizedNames = new Set<string>()
+  for (const ingredient of ingredients) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) return false
+    const normalized = normalizeIngredientName(preferredIngredientName(food, 'es'))
+    if (!normalized || normalizedNames.has(normalized)) return false
+    normalizedNames.add(normalized)
+    const actualRole = fastFoodRole(food)
+    if (!fastRequestedRoleCompatible(ingredient.role, actualRole)) return false
+  }
+  const roles = ingredients.map((ingredient) => {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)!
+    return effectiveFastIngredientRole(food, ingredient.role)
+  })
+  const hasProtein = roles.some((role) => role === 'protein' || role === 'mixed')
+  const hasCarb = roles.some((role) => role === 'carb' || role === 'fruit' || role === 'mixed')
+  const hasMainVeg = roles.includes('main_veg')
+  const hasFat = roles.includes('fat')
+  if (slot === 'lunch' || slot === 'dinner') return hasProtein && hasCarb && hasMainVeg
+  if (slot === 'breakfast') return hasProtein && hasCarb
+  return hasProtein && (hasCarb || hasFat)
+}
+
+function fastRequestedRoleCompatible(requested: FastRecipeIngredientRole, actual: FastIngredientRole): boolean {
+  if (requested === 'protein') return actual === 'protein' || actual === 'mixed'
+  if (requested === 'carb') return actual === 'carb' || actual === 'mixed'
+  if (requested === 'main_veg') return actual === 'main_veg'
+  if (requested === 'fruit') return actual === 'fruit'
+  if (requested === 'fat') return actual === 'fat'
+  if (requested === 'aromatic') return actual === 'aromatic' || actual === 'main_veg'
+  return false
+}
+
+function effectiveFastIngredientRole(food: NutritionFood, requested: FastRecipeIngredientRole): FastIngredientRole {
+  const actual = fastFoodRole(food)
+  if (requested === 'aromatic' && (actual === 'aromatic' || actual === 'main_veg')) return 'aromatic'
+  return actual
+}
+
+function fastFoodRole(food: NutritionFood): FastIngredientRole {
+  return fastRoleForFood(food)
+}
+
+function fastRecipeHasTitleIngredientConflict(recipe: RecipeCandidate, nutritionCatalog: NutritionFood[]): boolean {
+  const title = normalizeIngredientName(recipe.title)
+  const ingredientText = normalizeIngredientName(recipe.ingredients.map((ingredient) => ingredient.name).join(' '))
+  if (recipe.locale === 'es' && fastSpanishTitleHasEnglishIngredientTerms(title)) return true
+  if (title.includes('queso') && !/(queso|cheese|mozzarella|cheddar|cottage|requeson)/.test(ingredientText)) return true
+  if (/\btacos?\b/.test(title) && !/(tortilla|wrap)/.test(ingredientText)) return true
+  if (/(cuscus|couscous)/.test(title) && !/(cuscus|couscous)/.test(ingredientText)) return true
+  if (/(uva|uvas|grape|grapes)/.test(title) && !/(uva|uvas|grape|grapes)/.test(ingredientText)) return true
+  if (/(pera|peras|pear|pears)/.test(title) && !/(pera|peras|pear|pears)/.test(ingredientText)) return true
+  if (/(semilla|semillas|pepita|pepitas|seed|seeds)/.test(title) && !/(semilla|semillas|pepita|pepitas|seed|seeds)/.test(ingredientText)) return true
+  if (/(kefir|kefir)/.test(title) && !/(kefir|kefir)/.test(ingredientText)) return true
+  if (/(cacao|cocoa|chocolate)/.test(title) && !/(cacao|cocoa|chocolate)/.test(ingredientText)) return true
+  const recipeFoodIds = new Set(recipe.ingredients.map((ingredient) => findNutritionFoodByName(ingredient.name, nutritionCatalog)?.id).filter(Boolean))
+  for (const food of nutritionCatalog) {
+    const aliases = [food.canonicalName, ...food.aliases]
+      .map(normalizeIngredientName)
+      .filter((alias) => alias.length >= 4 && !fastGenericTitleTerms.has(alias))
+    if (aliases.some((alias) => title.includes(alias)) && !recipeFoodIds.has(food.id)) return true
+  }
+  return false
+}
+
+const fastGenericTitleTerms = new Set(['raw', 'cooked', 'fresh', 'natural', 'uncooked', 'lean', 'breast'])
+
+function fastSpanishTitleHasEnglishIngredientTerms(normalizedTitle: string): boolean {
+  return /\b(chickpeas?|lettuce|cucumber|kiwifruit|berries|apple|turkey|chicken|beef|rice|bread|oats|potato|spinach|carrot|yogurt|greek|almonds|cheese|milk)\b/.test(normalizedTitle)
+}
+
+function fastRecipeHasBadPairing(recipe: RecipeCandidate, nutritionCatalog: NutritionFood[], slot: MealSlot): boolean {
+  const foods = recipe.ingredients.map((ingredient) => findNutritionFoodByName(ingredient.name, nutritionCatalog)).filter((food): food is NutritionFood => Boolean(food))
+  return Boolean(fastCombinationIssue(foods, slot))
+}
+
+function defaultFastIngredientAmount(role: FastIngredientRole, slot: MealSlot, normalizedName: string): number {
+  if (role === 'aromatic') {
+    if (normalizedName.includes('garlic') || normalizedName.includes('ajo')) return 4
+    if (normalizedName.includes('lemon') || normalizedName.includes('limon') || normalizedName.includes('vinegar') || normalizedName.includes('vinagre')) return 8
+    return 6
+  }
+  if (role === 'fat') {
+    if (normalizedName.includes('oil') || normalizedName.includes('aceite')) return 8
+    if (normalizedName.includes('avocado') || normalizedName.includes('aguacate')) return slot === 'snack' ? 60 : 80
+    if (normalizedName.includes('almond') || normalizedName.includes('almendra')) return 22
+    if (normalizedName.includes('peanut') || normalizedName.includes('cacahuete')) return 20
+    return 18
+  }
+  if (role === 'fruit') return slot === 'snack' || slot === 'breakfast' ? 110 : 90
+  if (role === 'main_veg') return slot === 'snack' ? 100 : 140
+  if (role === 'carb' || role === 'mixed') {
+    if (normalizedName.includes('oat') || normalizedName.includes('avena')) return 55
+    if (normalizedName.includes('bread') || normalizedName.includes('pan')) return 70
+    return slot === 'breakfast' || slot === 'snack' ? 90 : 190
+  }
+  if (role === 'protein') {
+    if (normalizedName.includes('cheese') || normalizedName.includes('queso') || normalizedName.includes('mozzarella') || normalizedName.includes('cheddar')) return slot === 'breakfast' || slot === 'snack' ? 60 : 90
+    if (normalizedName.includes('yogurt') || normalizedName.includes('yogur') || normalizedName.includes('cottage') || normalizedName.includes('requeson')) return slot === 'snack' ? 180 : 240
+    if (normalizedName.includes('milk') || normalizedName.includes('leche')) return slot === 'snack' ? 220 : 250
+    if (normalizedName.includes('egg') || normalizedName.includes('huevo')) return 120
+    return slot === 'breakfast' || slot === 'snack' ? 140 : 180
+  }
+  return 80
+}
+
+function fastIngredientUnit(normalizedName: string): 'g' | 'ml' {
+  if (normalizedName.includes('oil') || normalizedName.includes('aceite')) return 'ml'
+  if (normalizedName.includes('milk') || normalizedName.includes('leche')) return 'ml'
+  if (normalizedName.includes('lemon') || normalizedName.includes('limon') || normalizedName.includes('vinegar') || normalizedName.includes('vinagre')) return 'ml'
+  return 'g'
+}
+
+function fastRecipeHasPlausibleStructure(recipe: RecipeCandidate, slot: MealSlot, nutritionCatalog: NutritionFood[]): boolean {
+  const roles = recipe.ingredients.map((ingredient) => fastIngredientRole(ingredient.name, nutritionCatalog))
+  if (roles.some((role) => role === 'other')) return false
+  const hasProtein = roles.some((role) => role === 'protein' || role === 'mixed')
+  const hasCarb = roles.some((role) => role === 'carb' || role === 'fruit' || role === 'mixed')
+  const hasVegetable = roles.includes('main_veg')
+  const hasFat = roles.includes('fat')
+  if (slot === 'lunch' || slot === 'dinner') return hasProtein && hasCarb && hasVegetable
+  if (slot === 'breakfast') return hasProtein && hasCarb
+  return hasProtein && (hasCarb || hasFat)
+}
+
+function fastIngredientRole(name: string, nutritionCatalog: NutritionFood[]): FastIngredientRole {
+  const food = findNutritionFoodByName(name, nutritionCatalog)
+  if (!food) return 'other'
+  return fastFoodRole(food)
+}
+
+function fastScaledAmountsWithinRanges(recipe: ReturnType<typeof scoreRecipe>, slot: MealSlot, nutritionCatalog: NutritionFood[]): boolean {
+  for (const ingredient of recipe.ingredients) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) return false
+    const range = fastAmountRangeForFood(food, slot)
+    if (ingredient.amount < range.min || ingredient.amount > range.max) return false
+  }
+  return true
+}
+
+function fastRecipeWithinSlotCalories(recipe: ReturnType<typeof scoreRecipe>, targetNutrition: NutritionTotals): boolean {
+  return recipe.nutrition.calories >= targetNutrition.calories * 0.72 && recipe.nutrition.calories <= targetNutrition.calories * 1.28
+}
+
+function optimizeFastWeekSelection(
+  initialDays: FastInitialWeekBuildResult['days'],
+  reserveCandidatesBySlot: Map<MealSlot, GeneratedScoredRecipe[]>,
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): FastInitialWeekBuildResult['days'] {
+  const ingredientCounts = new Map<string, number>()
+  const familyCounts = new Map<string, number>()
+  const usedTitles = new Set<string>()
+  const result: FastInitialWeekBuildResult['days'] = []
+
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const day: Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }> = []
+    for (const slot of mealSlots) {
+      const current = initialDays[dayIndex]?.find((meal) => meal.slot === slot)
+      const candidates = fastUniqueCandidates([
+        ...(current ? [{ recipe: current.recipe, source: 'llm' as const }] : []),
+        ...initialDays.flatMap((items) => items.filter((meal) => meal.slot === slot).map((meal) => ({ recipe: meal.recipe, source: 'llm' as const }))),
+        ...(reserveCandidatesBySlot.get(slot) ?? []),
+      ])
+      const ranked = candidates
+        .map((candidate) => {
+          const title = normalizeIngredientName(candidate.recipe.title)
+          const duplicatePenalty = usedTitles.has(title) ? 10_000 : 0
+          const repetitionLimitPenalty = fastWouldExceedRepetitionLimit(candidate.recipe, ingredientCounts, familyCounts, nutritionCatalog) ? 10_000 : 0
+          const currentBonus = current && title === normalizeIngredientName(current.recipe.title) ? 6 : 0
+          const score = recipeFitScore(candidate.recipe.nutrition, targetNutritionForSlot(targets, slot)) +
+            currentBonus -
+            duplicatePenalty -
+            repetitionLimitPenalty -
+            fastIngredientRepetitionPenalty(candidate.recipe, ingredientCounts, familyCounts, nutritionCatalog) -
+            fastSameDayPairingPenalty(candidate.recipe, day, nutritionCatalog)
+          return { candidate, score }
+        })
+        .sort((left, right) => right.score - left.score)
+      const selected = ranked[0]?.candidate
+      if (selected) {
+        day.push({ slot, recipe: selected.recipe })
+        usedTitles.add(normalizeIngredientName(selected.recipe.title))
+        addFastIngredientCounts(selected.recipe, ingredientCounts, familyCounts, nutritionCatalog)
+      }
+    }
+    result.push(day)
+  }
+  return result
+}
+
+function fastWouldExceedRepetitionLimit(
+  recipe: ReturnType<typeof scoreRecipe>,
+  ingredientCounts: Map<string, number>,
+  familyCounts: Map<string, number>,
+  nutritionCatalog: NutritionFood[],
+): boolean {
+  const nextIngredientCounts = new Map<string, number>()
+  const nextFamilyCounts = new Map<string, number>()
+  for (const ingredient of recipe.ingredients) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) continue
+    nextIngredientCounts.set(food.id, (nextIngredientCounts.get(food.id) ?? 0) + 1)
+    const family = fastIngredientFamily(food)
+    nextFamilyCounts.set(family, (nextFamilyCounts.get(family) ?? 0) + 1)
+  }
+  for (const [foodId, count] of nextIngredientCounts.entries()) {
+    const food = nutritionCatalog.find((item) => item.id === foodId)
+    if (food && (ingredientCounts.get(foodId) ?? 0) + count > fastWeeklyIngredientLimit(food)) return true
+  }
+  for (const [family, count] of nextFamilyCounts.entries()) {
+    if ((familyCounts.get(family) ?? 0) + count > fastWeeklyFamilyLimit(family)) return true
+  }
+  return false
+}
+
+function fastUniqueCandidates(candidates: GeneratedScoredRecipe[]): GeneratedScoredRecipe[] {
+  const seen = new Set<string>()
+  const result: GeneratedScoredRecipe[] = []
+  for (const candidate of candidates) {
+    const title = normalizeIngredientName(candidate.recipe.title)
+    if (!title || seen.has(title)) continue
+    seen.add(title)
+    result.push(candidate)
+  }
+  return result
+}
+
+function fastIngredientRepetitionPenalty(
+  recipe: ReturnType<typeof scoreRecipe>,
+  ingredientCounts: Map<string, number>,
+  familyCounts: Map<string, number>,
+  nutritionCatalog: NutritionFood[],
+): number {
+  let penalty = 0
+  for (const ingredient of recipe.ingredients) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) {
+      penalty += 200
+      continue
+    }
+    const count = ingredientCounts.get(food.id) ?? 0
+    const family = fastIngredientFamily(food)
+    const familyCount = familyCounts.get(family) ?? 0
+    const role = fastFoodRole(food)
+    if (role === 'protein' || role === 'mixed') penalty += Math.max(0, count - 1) * 24 + Math.max(0, familyCount - 2) * 12
+    else if (role === 'carb') penalty += Math.max(0, count - 2) * 18
+    else if (role === 'fat') penalty += Math.max(0, count - 2) * 22 + Math.max(0, familyCount - 3) * 14
+    else if (role === 'fruit') penalty += Math.max(0, count - 2) * 14
+    else if (role === 'main_veg') penalty += Math.max(0, count - 3) * 10
+    if (['oats', 'peanut_butter', 'almonds', 'milk', 'greek_yogurt', 'cottage_cheese'].includes(food.id)) {
+      penalty += Math.max(0, count - 2) * 26
+    }
+  }
+  return penalty
+}
+
+function fastSameDayPairingPenalty(
+  recipe: ReturnType<typeof scoreRecipe>,
+  day: Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>,
+  nutritionCatalog: NutritionFood[],
+): number {
+  const nextFamilies = new Set(recipe.ingredients.map((ingredient) => {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    return food ? fastIngredientFamily(food) : 'unknown'
+  }))
+  let penalty = 0
+  for (const meal of day) {
+    for (const ingredient of meal.recipe.ingredients) {
+      const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+      if (food && nextFamilies.has(fastIngredientFamily(food))) penalty += 3
+    }
+  }
+  return penalty
+}
+
+function addFastIngredientCounts(
+  recipe: ReturnType<typeof scoreRecipe>,
+  ingredientCounts: Map<string, number>,
+  familyCounts: Map<string, number>,
+  nutritionCatalog: NutritionFood[],
+): void {
+  for (const ingredient of recipe.ingredients) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) continue
+    ingredientCounts.set(food.id, (ingredientCounts.get(food.id) ?? 0) + 1)
+    const family = fastIngredientFamily(food)
+    familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1)
+  }
+}
+
+function fastIngredientFamily(food: NutritionFood): string {
+  return fastFamilyForFood(food)
+}
+
+function trimFastOptionalRepeatedIngredients(
+  initialDays: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): FastInitialWeekBuildResult['days'] {
+  let days = initialDays.map((day) => day.slice())
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const occurrences = fastOptionalRepeatOccurrences(days, nutritionCatalog)
+    if (occurrences.length === 0) break
+    let changed = false
+    for (const occurrence of occurrences) {
+      const meal = days[occurrence.dayIndex]?.[occurrence.mealIndex]
+      if (!meal) continue
+      const candidate = scoredRecipeToCandidate(meal.recipe)
+      if (candidate.ingredients.length <= 2) continue
+      candidate.ingredients.splice(occurrence.ingredientIndex, 1)
+      const scored = scoreRecipe(candidate, [], nutritionCatalog)
+      if (hasUnknownIngredients(scored) || !fastRecipeHasPlausibleStructure(scored, meal.slot, nutritionCatalog)) continue
+      const rebalanced = rebalanceFastRecipe(scored, meal.slot, targetNutritionForSlot(targets, meal.slot), nutritionCatalog)
+      if (!fastScaledAmountsWithinRanges(rebalanced, meal.slot, nutritionCatalog)) continue
+      days = days.map((day) => day.slice())
+      days[occurrence.dayIndex]![occurrence.mealIndex] = { slot: meal.slot, recipe: rebalanced }
+      changed = true
+      break
+    }
+    if (!changed) break
+  }
+  return days
+}
+
+function fastOptionalRepeatOccurrences(
+  days: FastInitialWeekBuildResult['days'],
+  nutritionCatalog: NutritionFood[],
+): Array<{ dayIndex: number; mealIndex: number; ingredientIndex: number; pressure: number }> {
+  const ingredientCounts = new Map<string, number>()
+  const familyCounts = new Map<string, number>()
+  const occurrences: Array<{
+    dayIndex: number
+    mealIndex: number
+    ingredientIndex: number
+    food: NutritionFood
+    family: string
+  }> = []
+  for (const [dayIndex, day] of days.entries()) {
+    for (const [mealIndex, meal] of day.entries()) {
+      for (const [ingredientIndex, ingredient] of meal.recipe.ingredients.entries()) {
+        const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+        if (!food) continue
+        const family = fastIngredientFamily(food)
+        ingredientCounts.set(food.id, (ingredientCounts.get(food.id) ?? 0) + 1)
+        familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1)
+        occurrences.push({ dayIndex, mealIndex, ingredientIndex, food, family })
+      }
+    }
+  }
+  return occurrences
+    .map((occurrence) => {
+      const meal = days[occurrence.dayIndex]?.[occurrence.mealIndex]
+      if (!meal) return null
+      const role = fastFoodRole(occurrence.food)
+      const ingredientOver = (ingredientCounts.get(occurrence.food.id) ?? 0) - fastWeeklyIngredientLimit(occurrence.food)
+      const familyOver = (familyCounts.get(occurrence.family) ?? 0) - fastWeeklyFamilyLimit(occurrence.family)
+      const awkwardOptionalFat = fastOptionalIngredientIsCulinarilyAwkward(meal, occurrence.food, nutritionCatalog)
+      if (role !== 'fat' || (!awkwardOptionalFat && ingredientOver <= 0 && familyOver <= 0)) return null
+      if (meal.recipe.ingredients.length <= 2) return null
+      if (fastRecipeTitleMentionsFood(meal.recipe.title, occurrence.food)) return null
+      return {
+        dayIndex: occurrence.dayIndex,
+        mealIndex: occurrence.mealIndex,
+        ingredientIndex: occurrence.ingredientIndex,
+        pressure: (awkwardOptionalFat ? 100 : 0) + Math.max(ingredientOver, 0) * 3 + Math.max(familyOver, 0) * 2 + occurrence.dayIndex * 0.01,
+      }
+    })
+    .filter((item): item is { dayIndex: number; mealIndex: number; ingredientIndex: number; pressure: number } => Boolean(item))
+    .sort((left, right) => right.pressure - left.pressure)
+}
+
+function fastOptionalIngredientIsCulinarilyAwkward(
+  meal: { slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> },
+  food: NutritionFood,
+  nutritionCatalog: NutritionFood[],
+): boolean {
+  if (food.id !== 'olive_oil' || (meal.slot !== 'breakfast' && meal.slot !== 'snack')) return false
+  const roles = meal.recipe.ingredients.map((ingredient) => fastIngredientRole(ingredient.name, nutritionCatalog))
+  return roles.includes('fruit') && !roles.includes('main_veg')
+}
+
+function fastRecipeTitleMentionsFood(title: string, food: NutritionFood): boolean {
+  const normalizedTitle = normalizeIngredientName(title)
+  return [food.canonicalName, ...food.aliases]
+    .map(normalizeIngredientName)
+    .filter((alias) => alias.length >= 4 && !fastGenericTitleTerms.has(alias))
+    .some((alias) => normalizedTitle.includes(alias))
+}
+
+function topUpFastWeeklyMacros(
+  initialDays: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): FastInitialWeekBuildResult['days'] {
+  let days = initialDays.map((day) => day.slice())
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const beforePenalty = fastWeeklyMacroPenalty(days, targets)
+    if (beforePenalty <= 0.1) break
+    const replacement = bestFastMacroTopUp(days, targets, nutritionCatalog, beforePenalty)
+    if (!replacement) break
+    days = days.map((day) => day.slice())
+    days[replacement.dayIndex]![replacement.mealIndex] = {
+      slot: days[replacement.dayIndex]![replacement.mealIndex]!.slot,
+      recipe: replacement.recipe,
+    }
+  }
+  return days
+}
+
+function bestFastMacroTopUp(
+  days: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+  beforePenalty: number,
+): { dayIndex: number; mealIndex: number; recipe: ReturnType<typeof scoreRecipe>; score: number } | null {
+  let best: { dayIndex: number; mealIndex: number; recipe: ReturnType<typeof scoreRecipe>; score: number } | null = null
+  for (const [dayIndex, day] of days.entries()) {
+    for (const [mealIndex, meal] of day.entries()) {
+      for (const candidate of fastMacroTopUpCandidates(meal, targets, nutritionCatalog)) {
+        const afterPenalty = fastWeeklyMacroPenaltyWithReplacement(days, targets, dayIndex, mealIndex, candidate)
+        const improvement = beforePenalty - afterPenalty
+        if (improvement <= 0.1) continue
+        const slotFit = recipeFitScore(candidate.nutrition, targetNutritionForSlot(targets, meal.slot)) * 0.01
+        const score = improvement + slotFit
+        if (!best || score > best.score) best = { dayIndex, mealIndex, recipe: candidate, score }
+      }
+    }
+  }
+  return best
+}
+
+function fastWeeklyMacroPenaltyWithReplacement(
+  days: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  dayIndex: number,
+  mealIndex: number,
+  recipe: ReturnType<typeof scoreRecipe>,
+): number {
+  const nutrition = sumNutrition(days.flatMap((day, currentDayIndex) => day.map((meal, currentMealIndex) => (
+    currentDayIndex === dayIndex && currentMealIndex === mealIndex ? recipe.nutrition : meal.recipe.nutrition
+  ))))
+  return fastWeeklyMacroPenaltyForNutrition(nutrition, weeklyTarget(targets))
+}
+
+function fastMacroTopUpCandidates(
+  meal: { slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> },
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): Array<ReturnType<typeof scoreRecipe>> {
+  const candidates: Array<ReturnType<typeof scoreRecipe>> = []
+  const slotTarget = targetNutritionForSlot(targets, meal.slot)
+  const baseCandidate = scoredRecipeToCandidate(meal.recipe)
+  for (const [index, ingredient] of baseCandidate.ingredients.entries()) {
+    const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+    if (!food) continue
+    const role = fastFoodRole(food)
+    if (!['carb', 'mixed', 'fruit', 'fat'].includes(role)) continue
+    const range = fastAmountRangeForFood(food, meal.slot)
+    if (ingredient.amount >= range.max - 1) continue
+    const amounts = [ingredient.amount + 15, ingredient.amount + 35, range.max]
+      .map((amount) => fastRoundedAmount(clamp(amount, range.min, range.max)))
+      .filter((amount, amountIndex, values) => amount > ingredient.amount && values.indexOf(amount) === amountIndex)
+    for (const amount of amounts) {
+      const candidate = scoredRecipeToCandidate(meal.recipe)
+      candidate.ingredients[index] = { ...candidate.ingredients[index]!, amount }
+      const scored = scoreRecipe(candidate, [], nutritionCatalog)
+      if (fastMacroTopUpRecipeIsValid(scored, meal.slot, slotTarget, nutritionCatalog)) candidates.push(scored)
+    }
+  }
+
+  if (baseCandidate.ingredients.length < 5) {
+    for (const foodId of fastMacroTopUpFoodIds(meal.slot)) {
+      if (baseCandidate.ingredients.some((ingredient) => findNutritionFoodByName(ingredient.name, nutritionCatalog)?.id === foodId)) continue
+      const food = nutritionCatalog.find((item) => item.id === foodId)
+      if (!food) continue
+      const range = fastAmountRangeForFood(food, meal.slot)
+      const unit = fastUnitForFood(food)
+      const role = fastRoleForReplacement(food)
+      const amounts = [
+        fastDefaultAmountForFood(food, meal.slot),
+        (range.min + range.max) / 2,
+        range.max,
+      ]
+        .map((amount) => fastRoundedAmount(clamp(amount, range.min, range.max)))
+        .filter((amount, index, values) => values.indexOf(amount) === index)
+      for (const amount of amounts) {
+        const candidate = scoredRecipeToCandidate(meal.recipe)
+        candidate.ingredients.push({
+          name: preferredIngredientName(food, candidate.locale),
+          amount,
+          unit,
+          preparation: role,
+        })
+        const scored = scoreRecipe(candidate, [], nutritionCatalog)
+        if (fastMacroTopUpRecipeIsValid(scored, meal.slot, slotTarget, nutritionCatalog)) candidates.push(scored)
+      }
+    }
+  }
+  return candidates
+}
+
+function fastMacroTopUpRecipeIsValid(
+  recipe: ReturnType<typeof scoreRecipe>,
+  slot: MealSlot,
+  slotTarget: NutritionTotals,
+  nutritionCatalog: NutritionFood[],
+): boolean {
+  if (hasUnknownIngredients(recipe)) return false
+  if (!fastRecipeHasPlausibleStructure(recipe, slot, nutritionCatalog)) return false
+  if (!fastScaledAmountsWithinRanges(recipe, slot, nutritionCatalog)) return false
+  if (!fastRecipeWithinSlotCalories(recipe, slotTarget)) return false
+  const candidate = scoredRecipeToCandidate(recipe)
+  if (fastRecipeHasTitleIngredientConflict(candidate, nutritionCatalog)) return false
+  if (fastRecipeHasBadPairing(candidate, nutritionCatalog, slot)) return false
+  return true
+}
+
+function fastMacroTopUpFoodIds(slot: MealSlot): string[] {
+  if (slot === 'breakfast') return ['granola', 'muesli', 'oats', 'banana', 'raisins', 'dates', 'honey', 'jam', 'whole_wheat_bread', 'chia_seeds']
+  if (slot === 'snack') return ['rice_cakes', 'whole_wheat_tortilla', 'whole_wheat_bread', 'granola', 'muesli', 'raisins', 'dates', 'hummus', 'honey', 'jam']
+  return ['rice_cooked', 'pasta_cooked', 'quinoa_cooked', 'couscous_cooked', 'bulgur_cooked', 'whole_wheat_tortilla', 'corn', 'peas', 'black_beans_cooked', 'olive_oil']
+}
+
+function fastWeeklyMacroPenalty(days: FastInitialWeekBuildResult['days'], targets: MacroTargets): number {
+  const nutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  return fastWeeklyMacroPenaltyForNutrition(nutrition, weeklyTarget(targets))
+}
+
+function fastWeeklyMacroPenaltyForNutrition(nutrition: NutritionTotals, target: NutritionTotals): number {
+  return Math.max(0, target.calories * 0.96 - nutrition.calories) / Math.max(target.calories, 1) * 1200 +
+    Math.max(0, nutrition.calories - target.calories * 1.06) / Math.max(target.calories, 1) * 900 +
+    Math.max(0, target.carbsG * 0.92 - nutrition.carbsG) / Math.max(target.carbsG, 1) * 1050 +
+    Math.max(0, nutrition.fatG - target.fatG * 1.22) / Math.max(target.fatG, 1) * 700 +
+    Math.max(0, nutrition.proteinG - target.proteinG * 1.35) / Math.max(target.proteinG, 1) * 650
+}
+
+function fastWeeklyMacroIssueMessage(days: FastInitialWeekBuildResult['days'], targets: MacroTargets): string {
+  const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  return `La semana cuadra calorías pero se aleja demasiado del reparto macro (${round(weeklyNutrition.proteinG / 7)}P/${round(weeklyNutrition.carbsG / 7)}C/${round(weeklyNutrition.fatG / 7)}F vs ${targets.proteinG}P/${targets.carbsG}C/${targets.fatG}F).`
+}
+
+function repairFastHandoutQualitySelection(
+  initialDays: FastInitialWeekBuildResult['days'],
+  reserveCandidatesBySlot: Map<MealSlot, GeneratedScoredRecipe[]>,
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): {
+  days: FastInitialWeekBuildResult['days']
+  actions: WeekRepairAction[]
+  requests: WeekRepairRequest[]
+  results: WeekRepairResult[]
+  issuesAfter: WeekRepairIssue[]
+} {
+  let days = initialDays.map((day) => day.slice())
+  const actions: WeekRepairAction[] = []
+  const requests: WeekRepairRequest[] = []
+  const results: WeekRepairResult[] = []
+
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const issues = evaluateFastHandoutQuality(days, targets, nutritionCatalog)
+    const issue = issues[0]
+    if (!issue) return { days, actions, requests, results, issuesAfter: [] }
+    requests.push({
+      reason: issue.reason,
+      message: issue.message,
+      attempt,
+      maxAttempts: 6,
+      dayIndex: issue.dayIndex,
+      slot: issue.slot,
+      title: issue.title,
+    })
+    const replacement = bestFastHandoutReplacement(days, issue, reserveCandidatesBySlot, targets, nutritionCatalog)
+    if (!replacement) {
+      results.push({
+        repaired: false,
+        retry: false,
+        notes: ['No había una reserva LLM que redujera el problema sin romper otra regla.'],
+        attempt,
+        reason: issue.reason,
+        dayIndex: issue.dayIndex,
+        slot: issue.slot,
+        actionCount: 0,
+      })
+      break
+    }
+    const previous = days[replacement.dayIndex]![replacement.mealIndex]!
+    days = days.map((day) => day.slice())
+    days[replacement.dayIndex]![replacement.mealIndex] = {
+      slot: previous.slot,
+      recipe: replacement.recipe,
+    }
+    actions.push({
+      attempt,
+      reason: issue.reason,
+      dayIndex: replacement.dayIndex,
+      slot: previous.slot,
+      previousTitle: previous.recipe.title,
+      nextTitle: replacement.recipe.title,
+      delta: diffNutrition(replacement.recipe.nutrition, previous.recipe.nutrition),
+    })
+    results.push({
+      repaired: true,
+      retry: false,
+      notes: ['Se reemplazó una comida con una reserva LLM validada localmente.'],
+      attempt,
+      reason: issue.reason,
+      dayIndex: replacement.dayIndex,
+      slot: previous.slot,
+      actionCount: 1,
+    })
+  }
+
+  return { days, actions, requests, results, issuesAfter: evaluateFastHandoutQuality(days, targets, nutritionCatalog) }
+}
+
+function bestFastHandoutReplacement(
+  days: FastInitialWeekBuildResult['days'],
+  issue: WeekRepairIssue,
+  reserveCandidatesBySlot: Map<MealSlot, GeneratedScoredRecipe[]>,
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): { dayIndex: number; mealIndex: number; recipe: ReturnType<typeof scoreRecipe>; score: number } | null {
+  const beforeScore = fastHandoutSelectionPenalty(days, targets, nutritionCatalog)
+  const usedTitles = new Set(days.flatMap((day) => day.map((meal) => normalizeIngredientName(meal.recipe.title))))
+  const positions = days.flatMap((day, dayIndex) => day.map((meal, mealIndex) => ({ dayIndex, mealIndex, meal })))
+    .filter(({ dayIndex, meal }) => {
+      if (issue.dayIndex !== undefined && dayIndex !== issue.dayIndex) return false
+      if (issue.slot && meal.slot !== issue.slot) return false
+      return true
+    })
+  const targetPositions = positions.length > 0
+    ? positions
+    : days.flatMap((day, dayIndex) => day.map((meal, mealIndex) => ({ dayIndex, mealIndex, meal })))
+
+  let best: { dayIndex: number; mealIndex: number; recipe: ReturnType<typeof scoreRecipe>; score: number } | null = null
+  for (const position of targetPositions) {
+    for (const candidate of reserveCandidatesBySlot.get(position.meal.slot) ?? []) {
+      const title = normalizeIngredientName(candidate.recipe.title)
+      if (!title || (usedTitles.has(title) && title !== normalizeIngredientName(position.meal.recipe.title))) continue
+      if (title === normalizeIngredientName(position.meal.recipe.title)) continue
+      const clone = days.map((day) => day.slice())
+      clone[position.dayIndex]![position.mealIndex] = { slot: position.meal.slot, recipe: candidate.recipe }
+      const afterScore = fastHandoutSelectionPenalty(clone, targets, nutritionCatalog)
+      const macroBonus = recipeFitScore(candidate.recipe.nutrition, targetNutritionForSlot(targets, position.meal.slot)) * 0.02
+      const score = beforeScore - afterScore + macroBonus
+      if (score <= 0.1) continue
+      if (!best || score > best.score) {
+        best = {
+          dayIndex: position.dayIndex,
+          mealIndex: position.mealIndex,
+          recipe: candidate.recipe,
+          score,
+        }
+      }
+    }
+    const localVariant = fastLocalVariantForMeal(position.meal, targetNutritionForSlot(targets, position.meal.slot), nutritionCatalog, usedTitles)
+    if (localVariant) {
+      const clone = days.map((day) => day.slice())
+      clone[position.dayIndex]![position.mealIndex] = { slot: position.meal.slot, recipe: localVariant }
+      const afterScore = fastHandoutSelectionPenalty(clone, targets, nutritionCatalog)
+      const macroBonus = recipeFitScore(localVariant.nutrition, targetNutritionForSlot(targets, position.meal.slot)) * 0.02
+      const score = beforeScore - afterScore + macroBonus
+      if (score > 0.1 && (!best || score > best.score)) {
+        best = {
+          dayIndex: position.dayIndex,
+          mealIndex: position.mealIndex,
+          recipe: localVariant,
+          score,
+        }
+      }
+    }
+  }
+  return best
+}
+
+function fastLocalVariantForMeal(
+  meal: { slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> },
+  targetNutrition: NutritionTotals,
+  nutritionCatalog: NutritionFood[],
+  usedTitles: Set<string>,
+): ReturnType<typeof scoreRecipe> | null {
+  let best: { recipe: ReturnType<typeof scoreRecipe>; score: number } | null = null
+  const considerReplacement = (ingredientIndex: number, replacementName: string): void => {
+    const replacementFood = findNutritionFoodByName(replacementName, nutritionCatalog)
+    if (!replacementFood) return
+    const replacementLabel = preferredIngredientName(replacementFood, meal.recipe.locale)
+    const replacementKey = normalizeIngredientName(replacementLabel)
+    if (meal.recipe.ingredients.some((item) => normalizeIngredientName(item.name) === replacementKey)) return
+    const candidate = scoredRecipeToCandidate(meal.recipe)
+    candidate.ingredients[ingredientIndex] = fastIngredientWithAmount(
+      { name: replacementLabel, role: fastRoleForReplacement(replacementFood) },
+      candidate.locale,
+      meal.slot,
+      nutritionCatalog,
+    )
+    candidate.title = fastTitleFromIngredients(candidate, meal.slot, nutritionCatalog)
+    if (usedTitles.has(normalizeIngredientName(candidate.title))) return
+    if (fastRecipeHasTitleIngredientConflict(candidate, nutritionCatalog) || fastRecipeHasBadPairing(candidate, nutritionCatalog, meal.slot)) return
+    const scored = scoreRecipe(candidate, [], nutritionCatalog)
+    if (hasUnknownIngredients(scored) || !fastRecipeHasPlausibleStructure(scored, meal.slot, nutritionCatalog)) return
+    const rebalanced = rebalanceFastRecipe(scored, meal.slot, targetNutrition, nutritionCatalog)
+    if (!fastScaledAmountsWithinRanges(rebalanced, meal.slot, nutritionCatalog) || !fastRecipeWithinSlotCalories(rebalanced, targetNutrition)) return
+    const score = recipeFitScore(rebalanced.nutrition, targetNutrition)
+    if (!best || score > best.score) best = { recipe: rebalanced, score }
+  }
+
+  for (const [ingredientIndex, ingredient] of meal.recipe.ingredients.entries()) {
+    const role = fastIngredientRole(ingredient.name, nutritionCatalog)
+    if (role === 'aromatic' || role === 'other') continue
+    for (const replacementName of fastRoleReplacementNames(role, meal.slot)) {
+      considerReplacement(ingredientIndex, replacementName)
+    }
+  }
+
+  if (!best) {
+    for (const [ingredientIndex] of meal.recipe.ingredients.entries()) {
+      for (const replacementName of fastBroadRepairReplacementNames(meal.slot)) {
+        considerReplacement(ingredientIndex, replacementName)
+      }
+    }
+  }
+  const selected = best as { recipe: ReturnType<typeof scoreRecipe>; score: number } | null
+  return selected ? selected.recipe : null
+}
+
+function fastBroadRepairReplacementNames(slot: MealSlot): string[] {
+  if (slot === 'breakfast') return ['greek yogurt', 'cottage cheese', 'egg', 'milk', 'whole wheat bread', 'oats', 'apple', 'berries', 'kiwi', 'avocado', 'almonds']
+  if (slot === 'snack') return ['greek yogurt', 'cottage cheese', 'egg', 'mozzarella', 'whole wheat bread', 'oats', 'apple', 'berries', 'kiwi', 'melon', 'cucumber', 'tomato', 'almonds']
+  return ['tofu', 'lean beef', 'salmon', 'cooked lentils', 'cooked chickpeas', 'turkey breast', 'chicken breast', 'cooked rice', 'cooked quinoa', 'cooked pasta', 'potato', 'broccoli', 'spinach', 'tomato', 'bell pepper', 'zucchini', 'carrot']
+}
+
+function fastRoleReplacementNames(role: FastIngredientRole, slot: MealSlot): string[] {
+  if (role === 'protein' || role === 'mixed') {
+    return slot === 'breakfast' || slot === 'snack'
+      ? ['greek yogurt', 'cottage cheese', 'egg', 'milk', 'mozzarella']
+      : ['tofu', 'lean beef', 'salmon', 'cooked lentils', 'cooked chickpeas', 'turkey breast', 'chicken breast']
+  }
+  if (role === 'carb') {
+    return slot === 'breakfast' || slot === 'snack'
+      ? ['whole wheat bread', 'oats', 'cooked quinoa', 'apple', 'berries']
+      : ['cooked rice', 'cooked quinoa', 'cooked pasta', 'potato', 'sweet potato']
+  }
+  if (role === 'fruit') return ['apple', 'banana', 'berries']
+  if (role === 'main_veg') {
+    return slot === 'breakfast' || slot === 'snack'
+      ? ['apple', 'berries', 'kiwi', 'cucumber', 'tomato', 'carrot']
+      : ['broccoli', 'spinach', 'tomato', 'bell pepper', 'zucchini', 'carrot', 'cucumber', 'lettuce']
+  }
+  if (role === 'fat') return slot === 'breakfast' || slot === 'snack' ? ['avocado', 'almonds', 'peanut butter'] : ['olive oil', 'avocado']
+  return []
+}
+
+function fastRoleForReplacement(food: NutritionFood): FastRecipeIngredientRole {
+  const role = fastFoodRole(food)
+  if (role === 'mixed') return 'protein'
+  if (role === 'main_veg') return 'main_veg'
+  if (role === 'protein' || role === 'carb' || role === 'fruit' || role === 'fat' || role === 'aromatic') return role
+  return 'protein'
+}
+
+function fastTitleFromIngredients(recipe: RecipeCandidate, slot: MealSlot, nutritionCatalog: NutritionFood[]): string {
+  const byRole = recipe.ingredients.map((ingredient) => ({
+    name: ingredient.name,
+    label: fastDisplayIngredientName(ingredient.name, nutritionCatalog),
+    role: fastIngredientRole(ingredient.name, nutritionCatalog),
+  }))
+  const protein = byRole.find((item) => item.role === 'protein' || item.role === 'mixed')
+  const carb = byRole.find((item) => item.role === 'carb')
+  const fruit = byRole.find((item) => item.role === 'fruit')
+  const veg = byRole.find((item) => item.role === 'main_veg')
+  const fat = byRole.find((item) => item.role === 'fat')
+  const used = new Set<string>()
+  const pick = (...items: Array<typeof byRole[number] | undefined>): string | undefined => {
+    for (const item of items) {
+      const label = item?.label?.trim()
+      const key = normalizeIngredientName(label ?? '')
+      if (!label || !key || used.has(key)) continue
+      used.add(key)
+      return label
+    }
+    return undefined
+  }
+  const fallback = (...excluded: Array<typeof byRole[number] | undefined>) => byRole.find((item) => !excluded.includes(item))
+  const main = pick(protein, byRole[0]) ?? recipe.title
+  const second = slot === 'breakfast' || slot === 'snack'
+    ? pick(fruit, carb, fat, veg, fallback(protein))
+    : pick(carb, fruit, veg, fat, fallback(protein))
+  const third = slot === 'breakfast' || slot === 'snack'
+    ? pick(fat, fruit, carb, veg, fallback(protein))
+    : pick(veg, fat, carb, fruit, fallback(protein))
+  if (second && third) return capitalizeWords(`${main} con ${second} y ${third}`)
+  if (second) return capitalizeWords(`${main} con ${second}`)
+  return capitalizeWords(main)
+}
+
+function fastDisplayIngredientName(name: string, nutritionCatalog: NutritionFood[]): string {
+  const food = findNutritionFoodByName(name, nutritionCatalog)
+  const label = food ? preferredIngredientName(food, 'es') : name
+  const normalized = normalizeIngredientName(label)
+  if (normalized.includes('whole wheat bread')) return 'pan integral'
+  if (normalized === 'egg' || normalized === 'eggs') return 'huevo'
+  if (normalized.includes('cheese')) return 'queso'
+  if (normalized.includes('yogurt') && normalized.includes('greek')) return 'yogur griego'
+  if (normalized === 'milk') return 'leche'
+  if (normalized.includes('peanut butter')) return 'crema de cacahuete'
+  if (normalized.includes('kiwifruit')) return 'kiwi'
+  if (normalized.includes('melon')) return 'melón'
+  if (normalized.includes('nectarine')) return 'nectarina'
+  if (normalized.includes('berries')) return 'frutos rojos'
+  if (normalized.includes('banana')) return 'plátano'
+  return label
+    .replace(/^cooked /i, '')
+    .replace(/^raw /i, '')
+    .replace(/,.*$/, '')
+    .trim()
+}
+
+function capitalizeWords(value: string): string {
+  const text = value.trim()
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text
+}
+
+function fastHandoutSelectionPenalty(
+  days: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): number {
+  const issues = evaluateFastHandoutQuality(days, targets, nutritionCatalog)
+  const issuePenalty = issues.reduce((total, issue) => {
+    if (issue.reason === 'repetition_conflict') return total + 500
+    if (issue.reason === 'daily_calorie_drift' || issue.reason === 'weekly_protein_low') return total + 650
+    return total + 900
+  }, 0)
+  const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  const weeklyTargetNutrition = weeklyTarget(targets)
+  return issuePenalty +
+    Math.abs(weeklyNutrition.calories - weeklyTargetNutrition.calories) / Math.max(weeklyTargetNutrition.calories, 1) * 120 +
+    Math.abs(weeklyNutrition.proteinG - weeklyTargetNutrition.proteinG) / Math.max(weeklyTargetNutrition.proteinG, 1) * 90 +
+    Math.abs(weeklyNutrition.carbsG - weeklyTargetNutrition.carbsG) / Math.max(weeklyTargetNutrition.carbsG, 1) * 80 +
+    Math.abs(weeklyNutrition.fatG - weeklyTargetNutrition.fatG) / Math.max(weeklyTargetNutrition.fatG, 1) * 60
+}
+
+function evaluateFastHandoutQuality(
+  days: FastInitialWeekBuildResult['days'],
+  targets: MacroTargets,
+  nutritionCatalog: NutritionFood[],
+): WeekRepairIssue[] {
+  const issues: WeekRepairIssue[] = []
+  const ingredientCounts = new Map<string, Array<{ dayIndex: number; slot: MealSlot; title: string }>>()
+  const familyCounts = new Map<string, Array<{ dayIndex: number; slot: MealSlot; title: string }>>()
+  const titleCounts = new Map<string, Array<{ dayIndex: number; slot: MealSlot; title: string }>>()
+  for (const [dayIndex, day] of days.entries()) {
+    for (const meal of day) {
+      const titleKey = normalizeIngredientName(meal.recipe.title)
+      const titleItems = titleCounts.get(titleKey) ?? []
+      titleItems.push({ dayIndex, slot: meal.slot, title: meal.recipe.title })
+      titleCounts.set(titleKey, titleItems)
+      if (!fastRecipeHasPlausibleStructure(meal.recipe, meal.slot, nutritionCatalog)) {
+        issues.push({ reason: 'generation_exhausted', dayIndex, slot: meal.slot, title: meal.recipe.title, message: `${meal.recipe.title} no tiene una estructura culinaria válida.` })
+      }
+      if (!fastScaledAmountsWithinRanges(meal.recipe, meal.slot, nutritionCatalog)) {
+        issues.push({ reason: 'generation_exhausted', dayIndex, slot: meal.slot, title: meal.recipe.title, message: `${meal.recipe.title} tiene cantidades fuera de rango culinario.` })
+      }
+      if (fastRecipeHasTitleIngredientConflict(meal.recipe, nutritionCatalog)) {
+        issues.push({ reason: 'generation_exhausted', dayIndex, slot: meal.slot, title: meal.recipe.title, message: `${meal.recipe.title} nombra ingredientes que no están en la receta.` })
+      }
+      if (fastRecipeHasBadPairing(meal.recipe, nutritionCatalog, meal.slot)) {
+        issues.push({ reason: 'generation_exhausted', dayIndex, slot: meal.slot, title: meal.recipe.title, message: `${meal.recipe.title} contiene una combinación culinaria no válida.` })
+      }
+      const slotTargetCalories = targetNutritionForSlot(targets, meal.slot).calories
+      if (meal.recipe.nutrition.calories < slotTargetCalories * 0.72 || meal.recipe.nutrition.calories > slotTargetCalories * 1.28) {
+        issues.push({
+          reason: 'daily_calorie_drift',
+          dayIndex,
+          slot: meal.slot,
+          title: meal.recipe.title,
+          message: `${meal.recipe.title} queda demasiado lejos del objetivo calórico de ${slotLabel(meal.slot)}.`,
+        })
+      }
+      for (const ingredient of meal.recipe.ingredients) {
+        const food = findNutritionFoodByName(ingredient.name, nutritionCatalog)
+        if (!food) continue
+        const occurrence = { dayIndex, slot: meal.slot, title: meal.recipe.title }
+        const ingredientItems = ingredientCounts.get(food.id) ?? []
+        ingredientItems.push(occurrence)
+        ingredientCounts.set(food.id, ingredientItems)
+        const family = fastIngredientFamily(food)
+        const familyItems = familyCounts.get(family) ?? []
+        familyItems.push(occurrence)
+        familyCounts.set(family, familyItems)
+      }
+    }
+  }
+
+  for (const occurrences of titleCounts.values()) {
+    if (occurrences.length <= 1) continue
+    for (const occurrence of occurrences.slice(1)) {
+      issues.push({
+        reason: 'repetition_conflict',
+        dayIndex: occurrence.dayIndex,
+        slot: occurrence.slot,
+        title: occurrence.title,
+        message: `${occurrence.title} aparece ${occurrences.length} veces en la semana.`,
+      })
+    }
+  }
+
+  for (const [foodId, occurrences] of ingredientCounts.entries()) {
+    const food = nutritionCatalog.find((item) => item.id === foodId)
+    if (!food) continue
+    const max = fastWeeklyIngredientLimit(food)
+    if (occurrences.length > max) {
+      const occurrence = occurrences[max] ?? occurrences[occurrences.length - 1]!
+      issues.push({
+        reason: 'repetition_conflict',
+        dayIndex: occurrence.dayIndex,
+        slot: occurrence.slot,
+        title: occurrence.title,
+        message: `${preferredIngredientName(food, 'es')} aparece ${occurrences.length} veces; límite ${max}.`,
+      })
+    }
+  }
+  for (const [family, occurrences] of familyCounts.entries()) {
+    const max = fastWeeklyFamilyLimit(family)
+    if (occurrences.length > max) {
+      const occurrence = occurrences[max] ?? occurrences[occurrences.length - 1]!
+      issues.push({
+        reason: 'repetition_conflict',
+        dayIndex: occurrence.dayIndex,
+        slot: occurrence.slot,
+        title: occurrence.title,
+        message: `La familia ${family} aparece ${occurrences.length} veces; límite ${max}.`,
+      })
+    }
+  }
+
+  const weeklyNutrition = sumNutrition(days.flatMap((day) => day.map((meal) => meal.recipe.nutrition)))
+  const weeklyTargetNutrition = weeklyTarget(targets)
+  if (
+    weeklyNutrition.calories < weeklyTargetNutrition.calories * 0.94 ||
+    weeklyNutrition.calories > weeklyTargetNutrition.calories * 1.06 ||
+    weeklyNutrition.carbsG < weeklyTargetNutrition.carbsG * 0.9 ||
+    weeklyNutrition.fatG > weeklyTargetNutrition.fatG * 1.22 ||
+    weeklyNutrition.proteinG > weeklyTargetNutrition.proteinG * 1.35
+  ) {
+    issues.push({
+      reason: 'daily_calorie_drift',
+      message: fastWeeklyMacroIssueMessage(days, targets),
+    })
+  }
+  return issues.slice(0, 12)
+}
+
+function fastWeeklyIngredientLimit(food: NutritionFood): number {
+  return fastRepeatLimitForFood(food)
+}
+
+function fastWeeklyFamilyLimit(family: string): number {
+  return fastFamilyRepeatLimit(family)
+}
+
+function compactRecipeDescription(title: string, slot: MealSlot, locale: Locale): string {
+  if (locale === 'es') return `${slotLabel(slot)} validado: ${title.trim()}. Detalles culinarios generándose en segundo plano.`
+  return `${slotLabelEn(slot)} validated: ${title.trim()}. Cooking details are being generated in the background.`
+}
+
+function slotLabelEn(slot: MealSlot): string {
+  if (slot === 'breakfast') return 'Breakfast'
+  if (slot === 'lunch') return 'Lunch'
+  if (slot === 'dinner') return 'Dinner'
+  return 'Snack'
+}
+
+function defaultPrepTimeForSlot(slot: MealSlot): number {
+  if (slot === 'breakfast' || slot === 'snack') return 10
+  return 30
+}
+
+function compactRecipeSteps(slot: MealSlot, locale: Locale): string[] {
+  if (locale === 'es') {
+    return slot === 'breakfast' || slot === 'snack'
+      ? ['Preparar los ingredientes y montar el plato antes de servir.']
+      : ['Cocinar la proteína y los acompañamientos hasta que estén listos.', 'Montar el plato y ajustar sal o especias al gusto.']
+  }
+  return slot === 'breakfast' || slot === 'snack'
+    ? ['Prepare the ingredients and assemble before serving.']
+    : ['Cook the protein and sides until done.', 'Plate and season to taste.']
+}
+
+function validateFastWeekStructure(draft: FastWeekPayload): WeekRepairIssue | null {
+  const expectedCount = mealSlots.length * FAST_INITIAL_CANDIDATES_PER_SLOT
+  if (!Array.isArray(draft.candidates) || draft.candidates.length !== expectedCount) {
+    return fastStructureIssue(`El pool rápido no contiene exactamente ${expectedCount} candidatos.`)
+  }
+  const candidateIds = new Set<string>()
+  const knownSlots = new Set<MealSlot>(mealSlots)
+  for (const candidate of draft.candidates) {
+    if (!candidate || typeof candidate !== 'object') return fastStructureIssue('El pool rápido contiene candidatos inválidos.')
+    if (!knownSlots.has(candidate.slot)) return fastStructureIssue('El pool rápido contiene slots inválidos.')
+    if (typeof candidate.candidateId !== 'string' || candidate.candidateId.trim().length === 0) return fastStructureIssue('El pool rápido contiene candidateId inválidos.')
+    if (candidateIds.has(candidate.candidateId)) return fastStructureIssue('El pool rápido contiene candidateId repetidos.')
+    candidateIds.add(candidate.candidateId)
+    if (!candidate.recipe || !Array.isArray(candidate.recipe.ingredients)) return fastStructureIssue('El pool rápido contiene recetas incompletas.')
+  }
+  for (const slot of mealSlots) {
+    const slotCount = draft.candidates.filter((candidate) => candidate.slot === slot).length
+    if (slotCount !== FAST_INITIAL_CANDIDATES_PER_SLOT) {
+      return fastStructureIssue(`El pool rápido no contiene exactamente ${FAST_INITIAL_CANDIDATES_PER_SLOT} candidatos para ${slot}.`)
+    }
+  }
+  return null
+}
+
+function assertSelectedMealCount(days: FastInitialWeekBuildResult['days']): WeekRepairIssue | null {
+  if (days.length !== 7) return fastStructureIssue('La semana validada no contiene 7 días.')
+  for (const [dayIndex, day] of days.entries()) {
+    if (day.length !== mealSlots.length) return fastStructureIssue(`${dayName(dayIndex)} no tiene cuatro comidas válidas.`)
+    const slots = new Set(day.map((meal) => meal.slot))
+    if (mealSlots.some((slot) => !slots.has(slot))) return fastStructureIssue(`${dayName(dayIndex)} no tiene cuatro comidas válidas.`)
+  }
+  return null
+}
+
+function fastStructureIssue(message: string): WeekRepairIssue {
+  return { reason: 'generation_exhausted', message }
+}
+
+function emptyRepairTrace(): WeekRepairTrace {
+  return { attempted: false, maxAttempts: 2, issuesBefore: [], repairRequests: [], repairResults: [], actions: [], issuesAfter: [], repaired: true }
+}
+
+function fastValidationMessage(issue: WeekRepairIssue): string {
+  if (issue.reason === 'banned_item_conflict') return issue.message
+  if (issue.reason === 'low_nutrition_confidence') return 'El menú generado contenía ingredientes sin nutrición determinística suficiente. No se ha guardado el perfil.'
+  if (issue.reason === 'repetition_conflict') return `${issue.message} No se ha guardado el perfil.`
+  if (issue.reason === 'daily_calorie_drift' || issue.reason === 'weekly_protein_low') return 'El menú generado no cumplió los objetivos nutricionales mínimos. No se ha guardado el perfil.'
+  return 'El proveedor devolvió una semana incompleta o inválida. No se ha guardado el perfil.'
+}
+
+function fastFailureCode(issue: WeekRepairIssue): FastInitialGenerationError['failureCode'] {
+  if (issue.reason === 'banned_item_conflict') return 'banned_item_conflict'
+  if (issue.reason === 'low_nutrition_confidence') return 'low_nutrition_confidence'
+  if (issue.reason === 'repetition_conflict') return 'repetition_conflict'
+  if (issue.reason === 'daily_calorie_drift') return 'daily_calorie_drift'
+  if (issue.reason === 'weekly_protein_low') return 'weekly_protein_low'
+  return 'generation_exhausted'
+}
+
 async function buildRecipesForWeek(profile: ProfileRow, targets: MacroTargets): Promise<{
   days: Array<Array<{ slot: MealSlot; recipe: ReturnType<typeof scoreRecipe> }>>
   source: 'llm' | 'template' | 'mixed'
@@ -2824,9 +4889,10 @@ async function generateRecipeCandidatesCached(input: RecipeGenerationInput): Pro
   return { ...result, cacheHit: false }
 }
 
-async function readAiCache<T>(schemaVersion: string, input: unknown): Promise<T | null> {
+async function readAiCache<T>(schemaVersion: string, input: unknown, options: { reasoningEffort?: string } = {}): Promise<T | null> {
   const status = codexStatus()
-  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, status.reasoningEffort)
+  const reasoningEffort = options.reasoningEffort ?? status.reasoningEffort
+  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, reasoningEffort)
   const sql = sqlClient()
   const [cached] = await sql<[{ output: T }]>`
     select output from ai_cache
@@ -2840,9 +4906,10 @@ async function readAiCache<T>(schemaVersion: string, input: unknown): Promise<T 
   return cached?.output ?? null
 }
 
-async function writeAiCache(schemaVersion: string, input: unknown, output: unknown): Promise<void> {
+async function writeAiCache(schemaVersion: string, input: unknown, output: unknown, options: { reasoningEffort?: string } = {}): Promise<void> {
   const status = codexStatus()
-  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, status.reasoningEffort)
+  const reasoningEffort = options.reasoningEffort ?? status.reasoningEffort
+  const inputHash = aiCacheInputHash(schemaVersion, input, status.model, reasoningEffort)
   const sql = sqlClient()
   await sql`
     insert into ai_cache (user_id, input_hash, model, schema_version, output)
@@ -2905,7 +4972,7 @@ async function readBooleanRuntimeSetting(
   return { value: String(envValue).toLowerCase() !== 'false', source: 'env' }
 }
 
-interface IngredientAliasMapping {
+export interface IngredientAliasMapping {
   alias: string
   normalizedAlias: string
   foodId: string
@@ -3611,8 +5678,7 @@ function scaleRecipe(recipe: RecipeCandidate, factor: number): RecipeCandidate {
   }
 }
 
-async function persistRecipe(recipe: ReturnType<typeof scoreRecipe>, source: string): Promise<string> {
-  const sql = sqlClient()
+async function persistRecipe(recipe: ReturnType<typeof scoreRecipe>, source: string, sql: SqlExecutor = sqlClient()): Promise<string> {
   const [row] = await sql<[{ id: string }]>`
     insert into recipes (
       user_id, title, locale, description, servings, prep_time_minutes, cuisine, flavor_profile,
@@ -4023,7 +6089,68 @@ function recipeIncludesAny(recipe: { ingredients: Array<{ name: string }> }, avo
 }
 
 function matchingBannedFoods(recipe: { ingredients: Array<{ name: string }> }, bannedFoods: string[]): string[] {
+  if ('title' in recipe || 'description' in recipe || 'steps' in recipe) {
+    return recipeTextMatches(recipe as RecipeCandidate, bannedFoods)
+  }
   return bannedFoods.filter((food) => recipeIncludes(recipe, food))
+}
+
+function recipeTextMatches(recipe: Partial<RecipeCandidate> & { ingredients: Array<{ name: string }> }, terms: string[]): string[] {
+  const haystack = normalizeIngredientName([
+    recipe.title,
+    recipe.description,
+    recipe.cuisine,
+    recipe.flavorProfile,
+    ...(recipe.tags ?? []),
+    ...recipe.ingredients.map((ingredient) => ingredient.name),
+    ...(recipe.steps ?? []),
+  ].filter(Boolean).join(' '))
+  const matches = terms.filter((term) => {
+    const normalized = normalizeIngredientName(term)
+    return normalized.length >= 2 && haystack.includes(normalized)
+  })
+  return unique(matches)
+}
+
+function expandedFoodTerms(values: string[], catalog: NutritionFood[]): string[] {
+  const normalizedValues = values.map(normalizeIngredientName).filter((value) => value.length >= 2)
+  const terms = new Set(values.map((value) => value.trim()).filter(Boolean))
+  for (const food of catalog) {
+    const names = [food.canonicalName, ...food.aliases]
+    const normalizedNames = names.map(normalizeIngredientName)
+    if (normalizedValues.some((value) => normalizedNames.some((name) => name.includes(value) || value.includes(name)))) {
+      for (const name of names) {
+        if (name.trim()) terms.add(name.trim())
+      }
+    }
+  }
+  return Array.from(terms)
+}
+
+function foodMatchesAny(food: NutritionFood, terms: string[]): boolean {
+  const normalizedTerms = terms.map(normalizeIngredientName).filter((term) => term.length >= 2)
+  const names = [food.canonicalName, ...food.aliases].map(normalizeIngredientName)
+  return normalizedTerms.some((term) => names.some((name) => name.includes(term) || term.includes(name)))
+}
+
+function preferredIngredientName(food: NutritionFood, locale: Locale): string {
+  return preferredFastIngredientName(food, locale)
+}
+
+function fastIngredientBucketLimit(bucket: string): number {
+  if (bucket === 'protein') return 20
+  if (bucket === 'carb') return 18
+  if (bucket === 'main_veg') return 18
+  if (bucket === 'vegetable') return 18
+  if (bucket === 'fruit') return 11
+  if (bucket === 'fat') return 7
+  if (bucket === 'aromatic') return 3
+  return 8
+}
+
+function cleanList(values: unknown): string[] {
+  if (!Array.isArray(values)) return []
+  return values.map((value) => String(value).trim()).filter(Boolean)
 }
 
 function replacementRequestScore(next: NutritionTotals, previous: NutritionTotals, request: ReplacementRequestFeatures): number {
