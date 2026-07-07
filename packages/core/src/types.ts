@@ -154,8 +154,9 @@ export interface WeekSkeleton {
 
 export interface ProviderStatus {
   configured: boolean
+  provider?: 'codex' | 'gemini'
   path: string
-  shape: 'direct' | 'codex-auth' | 'missing' | 'invalid'
+  shape: 'direct' | 'codex-auth' | 'gemini-api-key' | 'missing' | 'invalid'
   model: string
   reasoningEffort: string
   tokenPresent: boolean

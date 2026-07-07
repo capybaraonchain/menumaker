@@ -1,5 +1,5 @@
-import type { Locale } from '@menumaker/core'
-import { codexStatus, completeStructured } from './codexOAuth'
+import type { Locale, MealSlot } from '@menumaker/core'
+import { codexStatus, completeStructured } from './provider'
 
 export const RECIPE_DETAIL_ENRICHMENT_SCHEMA_VERSION = 'menumaker_recipe_detail_enrichment:v1'
 export const RECIPE_DETAIL_ENRICHMENT_TIMEOUT_MS = 120_000
@@ -7,15 +7,19 @@ export const RECIPE_DETAIL_ENRICHMENT_REASONING_EFFORT = 'none'
 
 export interface RecipeDetailEnrichmentInput {
   locale: Locale
+  slot?: MealSlot
+  existingTitles?: string[]
   recipes: Array<{
     recipeId: string
     title: string
+    slot?: MealSlot
     ingredients: Array<{ name: string; amount: number; unit: string }>
   }>
 }
 
 export interface RecipeDetailPayload {
   recipeId: string
+  displayTitle: string
   description: string
   prepTimeMinutes: number
   cuisine: string
@@ -49,21 +53,29 @@ export async function generateRecipeDetails(input: RecipeDetailEnrichmentInput):
 
   const system = input.locale === 'es'
     ? [
-        'Completa detalles culinarios breves para recetas ya validadas por MenuMaker.',
-        'No cambies títulos ni ingredientes. No calcules nutrición.',
-        'Devuelve solo JSON válido. Escribe descripciones y pasos concisos en español.',
+        'Eres el redactor culinario de MenuMaker.',
+        'Convierte recetas validadas localmente en recetas apetecibles y humanas sin cambiar ingredientes ni cantidades.',
+        'Puedes mejorar el título visible, pero no puedes nombrar alimentos que no estén en la lista bloqueada.',
+        'No calcules nutrición. Devuelve solo JSON válido. Escribe en español.',
       ].join(' ')
     : [
-        'Complete brief cooking details for recipes already validated by MenuMaker.',
-        'Do not change titles or ingredients. Do not calculate nutrition.',
-        'Return only valid JSON. Keep descriptions and steps concise.',
+        'You are MenuMaker culinary copywriter.',
+        'Turn locally validated recipes into appealing human recipes without changing ingredients or amounts.',
+        'You may improve the visible title, but must not name foods absent from the locked ingredient list.',
+        'Do not calculate nutrition. Return only valid JSON. Write in English.',
       ].join(' ')
 
   const user = JSON.stringify({
     locale: input.locale,
+    slot: input.slot,
+    existingTitles: input.existingTitles ?? [],
     recipes: input.recipes,
     outputRules: [
       'Devuelve un objeto por cada recipeId.',
+      'displayTitle debe sonar como una receta real, no como una lista mecánica de ingredientes.',
+      'displayTitle debe usar una forma culinaria cuando ayude: bowl, tostada, wrap, ensalada, salteado, pasta, plato, dip, crema, tortilla, etc.',
+      'displayTitle no puede nombrar ingredientes ausentes. Puede usar palabras genéricas de forma culinaria como bowl, wrap, tostada, dip, ensalada o salteado.',
+      'Evita títulos repetidos o demasiado parecidos a existingTitles.',
       'description debe ser una frase corta y apetecible.',
       'steps debe tener de 2 a 4 pasos prácticos.',
       'tags debe tener máximo 4 valores.',
@@ -84,7 +96,7 @@ export async function generateRecipeDetails(input: RecipeDetailEnrichmentInput):
     return {
       providerConfigured: true,
       source: 'llm',
-      details: sanitizeDetails(payload.recipes, input.recipes.map((recipe) => recipe.recipeId)),
+      details: sanitizeDetails(payload.recipes, input.recipes.map((recipe) => ({ recipeId: recipe.recipeId, title: recipe.title }))),
       trace,
     }
   } catch (error) {
@@ -98,8 +110,9 @@ export async function generateRecipeDetails(input: RecipeDetailEnrichmentInput):
   }
 }
 
-function sanitizeDetails(raw: RecipeDetailPayload[] | undefined, recipeIds: string[]): RecipeDetailPayload[] {
-  const allowed = new Set(recipeIds)
+function sanitizeDetails(raw: RecipeDetailPayload[] | undefined, recipes: Array<{ recipeId: string; title: string }>): RecipeDetailPayload[] {
+  const allowed = new Set(recipes.map((recipe) => recipe.recipeId))
+  const titleById = new Map(recipes.map((recipe) => [recipe.recipeId, recipe.title]))
   const seen = new Set<string>()
   const details: RecipeDetailPayload[] = []
   for (const item of raw ?? []) {
@@ -112,6 +125,7 @@ function sanitizeDetails(raw: RecipeDetailPayload[] | undefined, recipeIds: stri
     seen.add(recipeId)
     details.push({
       recipeId,
+      displayTitle: sanitizeDisplayTitle(item.displayTitle, titleById.get(recipeId) ?? recipeId),
       description,
       prepTimeMinutes: Math.max(3, Math.min(90, Math.round(Number(item.prepTimeMinutes) || 20))),
       cuisine: item.cuisine?.trim() || 'casera',
@@ -123,10 +137,16 @@ function sanitizeDetails(raw: RecipeDetailPayload[] | undefined, recipeIds: stri
   return details
 }
 
+function sanitizeDisplayTitle(value: unknown, fallback: string): string {
+  const title = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+  return title.length >= 4 && title.length <= 90 ? title : fallback
+}
+
 const recipeDetailSchema = {
   type: 'object',
   properties: {
     recipeId: { type: 'string' },
+    displayTitle: { type: 'string' },
     description: { type: 'string' },
     prepTimeMinutes: { type: 'number' },
     cuisine: { type: 'string' },

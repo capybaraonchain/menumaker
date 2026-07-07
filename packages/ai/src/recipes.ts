@@ -1,5 +1,5 @@
 import type { Locale, MealSlot, NutritionTotals, RecipeCandidate } from '@menumaker/core'
-import { codexStatus, completeStructured } from './codexOAuth'
+import { codexStatus, completeStructured } from './provider'
 
 export interface RecipeGenerationInput {
   locale: Locale

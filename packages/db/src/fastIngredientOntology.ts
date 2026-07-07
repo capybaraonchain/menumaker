@@ -27,7 +27,7 @@ export interface FastIngredientBankItem {
 const seedIngredientMetadata: Record<string, Omit<FastIngredientMetadata, 'id'>> = {
   chicken_breast: { labelEs: 'pechuga de pollo', labelEn: 'chicken breast', role: 'protein', family: 'poultry', tags: ['savory_protein', 'lean_meat'], repeatLimit: 4 },
   egg: { labelEs: 'huevo', labelEn: 'egg', role: 'protein', family: 'egg', tags: ['breakfast_protein', 'savory_protein'], repeatLimit: 4, defaultAmounts: { default: 120 }, amountRanges: { default: { min: 80, max: 180 } } },
-  greek_yogurt: { labelEs: 'yogur griego', labelEn: 'greek yogurt', role: 'protein', family: 'dairy', tags: ['sweet_protein', 'dairy'], repeatLimit: 5, defaultAmounts: { snack: 180, default: 240 }, amountRanges: { default: { min: 120, max: 340 } } },
+  greek_yogurt: { labelEs: 'yogur griego', labelEn: 'greek yogurt', role: 'protein', family: 'dairy', tags: ['sweet_protein', 'dairy'], repeatLimit: 6, defaultAmounts: { snack: 180, default: 240 }, amountRanges: { default: { min: 120, max: 340 } } },
   rice_cooked: { labelEs: 'arroz cocido', labelEn: 'cooked rice', role: 'carb', family: 'starch', tags: ['neutral_carb'], repeatLimit: 7 },
   potato: { labelEs: 'patata', labelEn: 'potato', role: 'carb', family: 'starch', tags: ['neutral_carb'], repeatLimit: 7 },
   oats: { labelEs: 'avena', labelEn: 'oats', role: 'carb', family: 'starch', tags: ['sweet_carb', 'breakfast_carb'], repeatLimit: 4, defaultAmounts: { default: 55 }, amountRanges: { default: { min: 30, max: 85 } } },
@@ -128,7 +128,7 @@ export function fastRepeatLimitForFood(food: NutritionFood): number {
 }
 
 export function fastFamilyRepeatLimit(family: string): number {
-  if (family === 'dairy') return 10
+  if (family === 'dairy') return 12
   if (family === 'nuts') return 7
   if (family === 'seeds') return 6
   if (family === 'sweetener') return 5

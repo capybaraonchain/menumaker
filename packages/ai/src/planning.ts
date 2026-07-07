@@ -1,5 +1,5 @@
 import { mealSlots, type Locale, type MacroTargets, type MealSlot, type WeekSkeleton } from '@menumaker/core'
-import { codexStatus, completeStructured } from './codexOAuth'
+import { codexStatus, completeStructured } from './provider'
 
 export interface WeekSkeletonGenerationInput {
   locale: Locale

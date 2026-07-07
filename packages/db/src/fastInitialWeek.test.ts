@@ -108,11 +108,14 @@ test('fast ingredient bank excludes banned foods and avoids full alias expansion
 
 function validDraft(): FastWeekPayload {
   return {
-    candidates: mealSlots.flatMap((slot) => Array.from({ length: FAST_INITIAL_CANDIDATES_PER_SLOT }, (_, index) => ({
-      candidateId: `${slot}-${index}`,
-      slot,
-      recipe: payloadFromRecipe(recipeForSlot(slot, index), slot),
-    }))),
+    candidates: Array.from({ length: 7 }, (_, dayIndex) => mealSlots.flatMap((slot) => (
+      [0, 1].map((optionIndex) => ({
+        candidateId: `${dayIndex}-${slot}-${optionIndex}`,
+        dayIndex,
+        slot,
+        recipe: payloadFromRecipe(recipeForSlot(slot, dayIndex + optionIndex), slot),
+      }))
+    ))).flat(),
   }
 }
 
@@ -134,10 +137,16 @@ function generationResult(input: FastWeekGenerationInput, draft: FastWeekPayload
 
 function payloadFromRecipe(recipe: RecipeCandidate, slot: MealSlot): FastRecipePayload {
   return {
-    titleHint: recipe.title,
+    title: recipe.title,
+    description: recipe.description,
+    prepTimeMinutes: recipe.prepTimeMinutes,
+    cuisine: recipe.cuisine,
+    flavorProfile: recipe.flavorProfile,
+    tags: recipe.tags,
+    steps: recipe.steps,
     format: formatForTestSlot(slot),
-    ingredients: recipe.ingredients.slice(0, 5).map((ingredient) => ({
-      ingredientId: ingredientIdForTestIngredient(ingredient.name),
+    ingredients: recipe.ingredients.slice(0, 7).map((ingredient) => ({
+      name: ingredient.name,
       role: roleForTestIngredient(ingredient.name),
     })),
   }
@@ -193,11 +202,11 @@ function recipeForSlot(slot: MealSlot, index: number): RecipeCandidate {
   const breakfast = [
     ['Bol de yogur griego con avena y plátano', ['yogur griego natural', 'copos de avena', 'plátano']],
     ['Tostada integral con huevo y tomate', ['pan integral', 'huevo', 'tomate']],
-    ['Requesón con avena y manzana', ['requesón', 'copos de avena', 'manzana']],
+    ['Tostada integral con huevo y manzana', ['pan integral', 'huevo', 'manzana']],
     ['Leche con avena y frutos rojos', ['leche', 'copos de avena', 'frutos rojos']],
     ['Huevos con pan integral y aguacate', ['huevo', 'pan integral', 'aguacate']],
-    ['Yogur griego con berries y almendras', ['yogur griego natural', 'frutos rojos', 'almendras']],
-    ['Requesón con plátano y crema de cacahuete', ['requesón', 'plátano', 'crema de cacahuete']],
+    ['Yogur griego con frutos rojos y almendras', ['yogur griego natural', 'frutos rojos', 'almendras']],
+    ['Requesón con avena y manzana', ['requesón', 'copos de avena', 'manzana']],
     ['Tostada integral con huevo y espinacas', ['pan integral', 'huevo', 'espinacas']],
     ['Leche con pan integral y manzana', ['leche', 'pan integral', 'manzana']],
     ['Yogur griego con avena y manzana', ['yogur griego natural', 'copos de avena', 'manzana']],
@@ -208,8 +217,8 @@ function recipeForSlot(slot: MealSlot, index: number): RecipeCandidate {
     ['Leche con plátano', ['leche', 'plátano', 'almendras']],
     ['Tostada integral con crema de cacahuete', ['pan integral', 'crema de cacahuete', 'plátano']],
     ['Huevo con pan integral', ['huevo', 'pan integral', 'tomate']],
-    ['Yogur griego con berries', ['yogur griego natural', 'frutos rojos', 'almendras']],
-    ['Garbanzos con pepino y tomate', ['garbanzos cocidos', 'pepino', 'tomate']],
+    ['Yogur griego con frutos rojos', ['yogur griego natural', 'frutos rojos', 'almendras']],
+    ['Garbanzos con pan integral y pepino', ['garbanzos cocidos', 'pan integral', 'pepino']],
     ['Leche con pan integral', ['leche', 'pan integral', 'crema de cacahuete']],
     ['Huevo con aguacate', ['huevo', 'aguacate', 'tomate']],
     ['Yogur griego con plátano', ['yogur griego natural', 'plátano', 'almendras']],

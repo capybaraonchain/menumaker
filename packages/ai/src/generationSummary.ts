@@ -1,5 +1,5 @@
 import type { Locale, MacroTargets, MealSlot, NutritionTotals } from '@menumaker/core'
-import { codexStatus, completeStructured } from './codexOAuth'
+import { codexStatus, completeStructured } from './provider'
 
 export interface GenerationSummaryInput {
   locale: Locale

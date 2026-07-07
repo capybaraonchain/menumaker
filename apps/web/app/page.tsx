@@ -284,7 +284,7 @@ export default function App() {
         </div>
         <div className={`provider ${state.provider?.configured ? 'ready' : 'offline'}`}>
           <span />
-          {state.provider?.configured ? `${state.provider.model} ${state.provider.reasoningEffort}` : 'Codex offline'}
+          {state.provider?.configured ? `${state.provider.provider ?? 'llm'} · ${state.provider.model}` : 'LLM offline'}
         </div>
       </header>
 
@@ -542,7 +542,7 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
         carbsG: Number(form.get('manualCarbsG')),
         fatG: Number(form.get('manualFatG')),
       } : null,
-      likes: splitList(String(form.get('likes') || '')),
+      likes: [],
       dislikes: splitList(String(form.get('dislikes') || '')),
       bannedFoods: splitList(String(form.get('bannedFoods') || '')),
     }
@@ -582,7 +582,6 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
               <label>Grasa (g)<input name="manualFatG" type="number" defaultValue="70" required /></label>
             </div>
           )}
-          <label>Me gusta<input name="likes" placeholder="salmón, arroz, yogur" /></label>
           <label>Evitar<input name="dislikes" placeholder="brócoli, atún, cilantro..." /></label>
           <label>No puedo comer<input name="bannedFoods" placeholder="cacahuetes, marisco, gluten..." /></label>
           <label className="checkline"><input type="checkbox" checked={rough} onChange={(event) => setRough(event.target.checked)} /> Acepto estimaciones aproximadas si omito edad o sexo.</label>
@@ -1656,7 +1655,7 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
         <Metric label="idioma" value={profile.locale} />
       </div>
       <div className="preference-lines">
-        <p><strong>Me gusta:</strong> {profile.likes.join(', ') || 'Sin datos'}</p>
+        <p><strong>Me gusta (catálogo):</strong> {profile.likes.join(', ') || 'Sin datos'}</p>
         <p><strong>Evitar:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
         <p><strong>No puedo comer:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
       </div>

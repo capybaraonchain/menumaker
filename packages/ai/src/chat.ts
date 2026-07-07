@@ -1,5 +1,5 @@
 import type { WeeklyMenuPlan } from '@menumaker/core'
-import { codexStatus, completeStructured, completeText } from './codexOAuth'
+import { codexStatus, completeStructured, completeText } from './provider'
 
 export interface PlannedChatCommand {
   intent: 'none' | 'clarify' | 'savePreference' | 'regenerateWeek' | 'regenerateDay' | 'regenerateMeal'
