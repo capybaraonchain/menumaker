@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/menumaker-banner.png" alt="MenuMaker weekly meal planning banner" width="100%">
+</p>
+
 <h1 align="center">MenuMaker</h1>
 
 <p align="center">
