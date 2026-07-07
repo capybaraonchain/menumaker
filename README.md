@@ -7,10 +7,28 @@
 </p>
 
 <p align="center">
-  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-000000?style=for-the-badge&logo=nextdotjs&logoColor=white">
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=nextdotjs&logoColor=white">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white">
   <img alt="Postgres" src="https://img.shields.io/badge/Postgres-local--first-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
   <img alt="LLM" src="https://img.shields.io/badge/LLM-Codex%20%7C%20Gemini-111827?style=for-the-badge">
+</p>
+
+<p align="center">
+  <code>typescript</code>
+  ·
+  <code>nextjs</code>
+  ·
+  <code>postgres</code>
+  ·
+  <code>llm</code>
+  ·
+  <code>nutrition</code>
+  ·
+  <code>meal-planning</code>
+  ·
+  <code>local-first</code>
+  ·
+  <code>mcp</code>
 </p>
 
 <p align="center">
@@ -31,9 +49,45 @@
 
 MenuMaker is a local-first mobile web app for planning weekly diets around a personal profile. It combines LLM-generated meal ideas with deterministic nutrition calculation, ingredient matching, menu scoring, fallback policy controls, and a local Postgres-backed application service.
 
-The project is built as a portfolio-safe snapshot of a real planning system: the LLM suggests recipes, but the app validates ingredients, macros, banned foods, repetition, and menu quality before persisting a week.
+The project is built as a portfolio-safe snapshot of a real planning system: the LLM proposes recipes, but the app validates ingredients, macros, banned foods, repetition, nutrition confidence, and menu quality before persisting a week.
+
+<p align="center">
+  <img alt="MenuMaker weekly menu overview with macro targets and validated meals" src="assets/screenshots/01-week-overview.png" width="430">
+</p>
 
 ## Features
+
+MenuMaker is deliberately mobile-first: the main workflow is a week view with regeneration controls, lock states, meal-level traceability, saved recipes, generation history, profile controls, and an assistant that can propose changes without applying them silently.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img alt="Meal detail with calculated macros, ingredients, and recipe steps" src="assets/screenshots/02-meal-detail.png">
+    </td>
+    <td width="50%">
+      <h3>Recipe details are auditable</h3>
+      <p>Each meal exposes calculated calories, macro breakdown, normalized ingredients, and preparation steps. The UI keeps the recipe idea separate from the nutrition math that validates it.</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>Generation is observable</h3>
+      <p>Saved menus and recent generation activity are visible in the app, so users can tell what changed and whether a new plan is ready.</p>
+    </td>
+    <td width="50%">
+      <img alt="Saved menu history and generation job status list" src="assets/screenshots/03-history-and-jobs.png">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img alt="Profile settings with nutrition sources, imports, and fallback controls" src="assets/screenshots/04-profile-controls.png">
+    </td>
+    <td width="50%">
+      <h3>Local controls stay explicit</h3>
+      <p>Profiles, nutrition imports, local food creation, and fallback behavior are surfaced as product controls instead of hidden scripts. This keeps live LLM testing and local fallback behavior easy to inspect.</p>
+    </td>
+  </tr>
+</table>
 
 <table>
   <tr>
@@ -67,6 +121,12 @@ The project is built as a portfolio-safe snapshot of a real planning system: the
     </td>
   </tr>
 </table>
+
+The in-app chat follows the same safety model as the MCP surface: it can interpret menu requests, but destructive or meaningful changes are routed through explicit actions and confirmation.
+
+<p align="center">
+  <img alt="Menu chat assistant for macro questions and proposed menu changes" src="assets/screenshots/05-chat-assistant.png" width="430">
+</p>
 
 ## Architecture
 
@@ -106,10 +166,16 @@ MenuMaker expects a local Postgres database named `menumaker`.
 npm install
 cp .env.example .env
 npm run setup:local
-npm run dev:web -- --hostname 0.0.0.0 --port 3000
+npm run dev:web
 ```
 
-Open the printed LAN URL from a phone on the same network, or use `http://localhost:3000` on the development machine.
+Open `http://localhost:3000` on the development machine after the web server starts.
+
+For the MCP server:
+
+```bash
+npm run dev:mcp
+```
 
 ## Configuration
 
@@ -159,7 +225,7 @@ MenuMaker demonstrates:
 - practical MCP tool design for controlled agent operation
 - focused tests around failure modes rather than only happy paths
 
-This public snapshot is meant to show product engineering judgment: the app uses AI where it helps, then validates the result with boring deterministic code before a user sees or saves a menu.
+This public snapshot is meant to show product engineering judgment: the app uses AI where it helps, then validates the result with deterministic code before a user sees or saves a menu.
 
 ## License
 

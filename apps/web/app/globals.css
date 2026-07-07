@@ -131,7 +131,8 @@ p {
 
 .target-strip {
   display: flex;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  overflow: visible;
   gap: 8px;
   padding: 12px 0;
 }
@@ -242,13 +243,13 @@ p {
 
 .job-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: 8px;
-  padding: 10px;
+  padding: 14px;
 }
 
 .job-row.failed,
@@ -264,7 +265,8 @@ p {
 .job-row > div {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 5px;
+  flex: 1;
 }
 
 .job-actions,
@@ -464,7 +466,7 @@ p {
 .proposal-row {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   border: 1px solid var(--line);
@@ -474,6 +476,14 @@ p {
   color: var(--ink);
   text-align: left;
   box-shadow: 0 1px 0 rgba(30, 28, 22, 0.02);
+}
+
+.saved-row span,
+.history-row span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  flex: 1;
 }
 
 .meal-main {
@@ -926,6 +936,13 @@ label {
   color: white;
 }
 
+.profile-switcher button:disabled {
+  cursor: default;
+  opacity: 1;
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
 .preference-lines {
   display: grid;
   gap: 10px;
@@ -1008,6 +1025,7 @@ label {
 }
 
 .danger-zone {
+  margin-top: 180px;
   display: grid;
   gap: 12px;
   border: 1px solid rgba(162, 58, 43, 0.3);

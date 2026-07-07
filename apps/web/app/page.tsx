@@ -280,7 +280,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="tiny">MenuMaker</p>
-          <h1>{state.activeProfile.name}</h1>
+          <h1>{displayProfileName(state.activeProfile.name)}</h1>
         </div>
         <div className={`provider ${state.provider?.configured ? 'ready' : 'offline'}`}>
           <span />
@@ -564,7 +564,7 @@ function Onboarding({ onDone, embedded = false }: { onDone: (state: AppState) =>
         <p>Perfil en español, unidades métricas y macros editables antes de guardar.</p>
         <form onSubmit={submit}>
           <div className="field-grid">
-            <label>Nombre<input name="name" defaultValue="Yo" required /></label>
+            <label>Nombre<input name="name" defaultValue="Usuario" required /></label>
             <label>Peso actual (kg)<input name="weightKg" type="number" defaultValue="78" required /></label>
             <label>Peso objetivo (kg)<input name="targetWeightKg" type="number" defaultValue="74" required /></label>
             <label>Altura (cm)<input name="heightCm" type="number" defaultValue="178" required /></label>
@@ -648,7 +648,7 @@ function WeekScreen({
       <section className="target-strip">
         <span>Objetivo: {menu.target.calories} kcal</span>
         <span>Proteína mín. {menu.target.proteinG}g</span>
-        <span>Confianza {menu.target.confidence}</span>
+        <span>{Math.round(menu.target.carbsG)}g carbos · {Math.round(menu.target.fatG)}g grasa</span>
       </section>
       <GenerationNotice menu={menu} profileId={state.activeProfile?.id} onAction={onAction} />
       <GenerationJobsPanel jobs={state.generationJobs} profile={state.activeProfile} profileId={state.activeProfile?.id} onAction={onAction} onRelaxPreferences={onRelaxPreferences} onReviewIngredients={onReviewIngredients} onFallbackPolicy={onFallbackPolicy} onAdjustTargets={onAdjustTargets} compact />
@@ -667,8 +667,8 @@ function WeekScreen({
                 <article key={meal.id} className="meal-row">
                   <button className="meal-main" onClick={() => onSelectMeal(meal)}>
                     <span className="slot">{slotLabels[meal.slot]}</span>
-                    <strong>{meal.recipe.title}</strong>
-                    <small>{meal.nutrition.calories} kcal · {meal.nutrition.proteinG}g P · {meal.recipe.prepTimeMinutes} min · {meal.nutrition.confidence}</small>
+                    <strong>{displayFoodText(meal.recipe.title)}</strong>
+                    <small>{meal.nutrition.calories} kcal · {meal.nutrition.proteinG}g P · {meal.recipe.prepTimeMinutes} min</small>
                   </button>
                   <div className="row-actions">
                     <button className="icon-button" onClick={() => onAction({ action: 'lockMeal', menuMealId: meal.id, locked: !meal.locked, profileId: state.activeProfile?.id })}>{meal.locked ? <Lock /> : <Unlock />}</button>
@@ -733,7 +733,7 @@ function GenerationNotice({
     const details = [
       fastTraceDetails,
       skeletonTrace?.providerSource === 'llm' ? 'Esqueleto semanal LLM.' : null,
-      cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Nutrición calculada con datos determinísticos.',
+      cacheHits > 0 ? `${cacheHits} lote(s) salieron de caché AI.` : 'Macros revisados con la tabla nutricional local.',
       repairActions > 0 ? `${repairActions} reparación(es) de selección aplicadas.` : null,
     ].filter(Boolean).join(' ')
     return (
@@ -844,15 +844,15 @@ function GenerationJobsPanel({
         <span>{visibleJobs.some((job) => job.status === 'failed') ? <AlertTriangle /> : <LoaderCircle />}</span>
         <div>
           <strong>{visibleJobs.some((job) => job.status === 'failed')
-              ? 'Generación necesita atención'
+              ? 'Plan necesita atención'
               : visibleJobs.some((job) => job.status === 'running')
-                ? 'Generación en ejecución'
-                : 'Trabajos pendientes de generación'}</strong>
+                ? 'Plan actualizándose'
+                : 'Cambios pendientes'}</strong>
           <small>{visibleJobs.some((job) => job.status === 'running')
-              ? 'El backend está ejecutando el trabajo ahora.'
+              ? 'Estamos preparando una actualización del menú.'
               : visibleJobs.some((job) => job.status === 'queued')
-                ? 'El trabajo está en cola y espera ejecución.'
-                : 'Estado persistido del trabajo, no un mensaje genérico.'}</small>
+                ? 'Hay un cambio esperando ejecución.'
+                : 'Actividad reciente del menú.'}</small>
         </div>
         {queuedJobs.length > 0 && (
           <button className="secondary compact-action" type="button" onClick={() => onAction({ action: 'processQueuedGenerationJobs', profileId, limit: 1 })}>
@@ -1170,7 +1170,7 @@ function IngredientMappingModal({
       const nextResults = result.foods ?? []
       setSearchResults(nextResults)
       if (nextResults[0]) setCanonicalFoodName(nextResults[0].name)
-      if (nextResults.length === 0) setError('No encontré alimentos determinísticos para esa búsqueda. Importa una fuente o crea un alimento local.')
+      if (nextResults.length === 0) setError('No encontré alimentos para esa búsqueda. Importa una fuente o crea un alimento local.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se pudo buscar en fuentes nutricionales.')
     } finally {
@@ -1559,7 +1559,7 @@ function TargetEditModal({
 
 function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal; profileId: string; onClose: () => void; onAction: (payload: any) => Promise<any>; onEdit: () => void }) {
   return (
-    <Modal title={meal.recipe.title} onClose={onClose}>
+    <Modal title={displayFoodText(meal.recipe.title)} onClose={onClose}>
       <div className="meal-detail">
         <div className="macro-grid">
           <Metric label="kcal" value={meal.nutrition.calories} />
@@ -1567,7 +1567,7 @@ function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal;
           <Metric label="carbos" value={`${meal.nutrition.carbsG}g`} />
           <Metric label="grasa" value={`${meal.nutrition.fatG}g`} />
         </div>
-        <p>{meal.recipe.description}</p>
+        <p>{displayFoodText(meal.recipe.description)}</p>
         <div className="detail-actions">
           <button className="secondary" onClick={() => onAction({ action: 'starRecipe', profileId, recipeId: meal.recipe.id })}><Star /> Guardar</button>
           <button className="secondary" onClick={() => onAction({ action: 'lockMeal', profileId, menuMealId: meal.id, locked: !meal.locked })}>{meal.locked ? <Unlock /> : <Lock />} {meal.locked ? 'Desbloquear' : 'Bloquear'}</button>
@@ -1576,14 +1576,12 @@ function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal;
         <h3>Ingredientes</h3>
         <ul className="ingredient-list">{meal.recipe.ingredients.map((item) => (
           <li key={item.id}>
-            <span>{item.name}</span>
-            <small>{item.amount} {item.unit} · {confidenceExplanation(item.confidence)}</small>
-            {item.notes.length > 0 && <small>{item.notes.slice(0, 2).join(' ')}</small>}
+            <span>{displayFoodText(item.name)}</span>
+            <small>{item.amount} {item.unit}</small>
           </li>
         ))}</ul>
-        <p className="muted">{confidenceExplanation(meal.nutrition.confidence)}</p>
         <h3>Pasos</h3>
-        <ol className="steps">{meal.recipe.steps.map((step, index) => <li key={index}>{step}</li>)}</ol>
+        <ol className="steps">{meal.recipe.steps.map((step, index) => <li key={index}>{displayFoodText(step)}</li>)}</ol>
       </div>
     </Modal>
   )
@@ -1591,28 +1589,29 @@ function MealModal({ meal, profileId, onClose, onAction, onEdit }: { meal: Meal;
 
 function RecipesScreen({ state, onAction }: { state: AppState; onAction: (payload: any) => Promise<any> }) {
   if (state.savedRecipes.length === 0) return <EmptyState title="Sin recetas guardadas" body="Marca una receta con la estrella para verla aquí." />
-  return <div className="simple-list">{state.savedRecipes.map((item) => <article key={item.savedRecipeId} className="saved-row"><Star /><span><strong>{item.recipe.title}</strong><small>{item.recipe.nutrition.calories} kcal · {item.recipe.prepTimeMinutes} min</small></span><button className="icon-button" onClick={() => onAction({ action: 'unstarRecipe', savedRecipeId: item.savedRecipeId, profileId: state.activeProfile?.id })}><X /></button></article>)}</div>
+  return <div className="simple-list">{state.savedRecipes.map((item) => <article key={item.savedRecipeId} className="saved-row"><Star /><span><strong>{displayFoodText(item.recipe.title)}</strong><small>{item.recipe.nutrition.calories} kcal · {item.recipe.prepTimeMinutes} min</small></span><button className="icon-button" onClick={() => onAction({ action: 'unstarRecipe', savedRecipeId: item.savedRecipeId, profileId: state.activeProfile?.id })}><X /></button></article>)}</div>
 }
 
 function HistoryScreen({ state }: { state: AppState }) {
-  if (state.history.length === 0 && state.generationJobs.length === 0) return <EmptyState title="Sin historial" body="Los menús y trabajos de generación aparecerán aquí con sus snapshots." />
+  const visibleJobs = state.generationJobs.filter((job) => job.status !== 'cancelled')
+  if (state.history.length === 0 && visibleJobs.length === 0) return <EmptyState title="Sin historial" body="Los menús y actualizaciones aparecerán aquí." />
   return (
     <div className="history-screen">
       {state.history.length > 0 && (
         <section className="simple-list">
           <h2>Menús guardados</h2>
-          {state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · snapshot preservado</small></span></article>)}
+          {state.history.map((item) => <article key={item.id} className="history-row"><Archive /><span><strong>Semana {formatDate(item.weekStart)}</strong><small>{Math.round(item.nutrition.calories / 7)} kcal/día · guardado</small></span></article>)}
         </section>
       )}
-      {state.generationJobs.length > 0 && (
+      {visibleJobs.length > 0 && (
         <section className="simple-list">
-          <h2>Trabajos de generación</h2>
-          {state.generationJobs.map((job) => (
+          <h2>Actividad reciente</h2>
+          {visibleJobs.map((job) => (
             <article key={job.id} className={`history-row job-history ${job.status}`}>
               {job.status === 'failed' ? <AlertTriangle /> : job.status === 'completed' ? <Check /> : job.status === 'cancelled' ? <X /> : <LoaderCircle />}
               <span>
                 <strong>{jobKindLabel(job.kind)} · {jobStatusLabel(job.status)}</strong>
-                <small>{formatDateTime(job.updatedAt)} · {job.failureCode ? jobFailureLabel(job.failureCode) : `${job.logs.length} paso(s) registrados`}</small>
+                <small>{formatDateTime(job.updatedAt)} · {job.failureCode ? jobFailureLabel(job.failureCode) : jobActivityText(job)}</small>
                 {job.remediation && <small>{job.remediation.title}: {job.remediation.summary}</small>}
               </span>
             </article>
@@ -1645,30 +1644,30 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
     <section className="profile-screen">
       <h2>Perfil</h2>
       <div className="profile-switcher">
-        {state.profiles.map((item) => <button key={item.id} className={item.id === profile.id ? 'selected' : ''} onClick={() => onSwitch(item.id)}>{item.name}</button>)}
+        <button className="selected" onClick={() => onSwitch(profile.id)}>{displayProfileName(profile.name)}</button>
         <button onClick={onCreate}>Nuevo perfil</button>
       </div>
       <div className="profile-facts">
         <Metric label="objetivo" value={profile.goal === 'cut' ? 'Corte' : profile.goal === 'bulk' ? 'Volumen' : 'Mantener'} />
         <Metric label="actividad" value={activityLabels[profile.activityLevel] ?? profile.activityLevel} />
         <Metric label="peso cálculo proteína" value={`${profile.proteinCalculationWeightKg} kg`} />
-        <Metric label="idioma" value={profile.locale} />
+        <Metric label="idioma" value={profile.locale === 'es' ? 'Español' : profile.locale} />
       </div>
       <div className="preference-lines">
-        <p><strong>Me gusta (catálogo):</strong> {profile.likes.join(', ') || 'Sin datos'}</p>
-        <p><strong>Evitar:</strong> {profile.dislikes.join(', ') || 'Sin datos'}</p>
-        <p><strong>No puedo comer:</strong> {profile.bannedFoods.join(', ') || 'Sin datos'}</p>
+        <p><strong>Me gusta:</strong> {preferenceText(profile.likes, ['yogur griego', 'pollo', 'frutos rojos'])}</p>
+        <p><strong>Prefiero evitar:</strong> {preferenceText(profile.dislikes, ['fritos', 'bebidas azucaradas'])}</p>
+        <p><strong>No puedo comer:</strong> {preferenceText(profile.bannedFoods, ['cacahuetes'])}</p>
       </div>
       <NutritionSourcesPanel profile={profile} foods={state.mappableFoods} onAction={onAction} />
       <section className="settings-panel">
         <div>
           <h3>Generación local</h3>
-          <p>Controla si la app puede usar muletas determinísticas cuando el LLM no entrega suficientes candidatos válidos.</p>
+          <p>Controla cómo se completa el menú cuando el asistente no propone suficientes platos válidos.</p>
         </div>
         <label className="settings-toggle">
           <span>
-            <strong>Fallback de recetas</strong>
-            <small>{settings.sources.recipeTemplateFallback === 'app_setting' ? 'Configurado en la app' : 'Por defecto/env'} · {settings.recipeTemplateFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
+            <strong>Recetas de apoyo</strong>
+            <small>{settings.recipeTemplateFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
           </span>
           <input
             type="checkbox"
@@ -1679,8 +1678,8 @@ function ProfileScreen({ state, onSwitch, onCreate, onAction }: { state: AppStat
         </label>
         <label className="settings-toggle">
           <span>
-            <strong>Fallback de esqueleto semanal</strong>
-            <small>{settings.sources.weekSkeletonFallback === 'app_setting' ? 'Configurado en la app' : 'Por defecto/env'} · {settings.weekSkeletonFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
+            <strong>Estructura semanal de apoyo</strong>
+            <small>{settings.weekSkeletonFallbackAllowed ? 'habilitado' : 'deshabilitado'}</small>
           </span>
           <input
             type="checkbox"
@@ -1775,10 +1774,6 @@ function NutritionSourcesPanel({
   const [sourceBusy, setSourceBusy] = useState<string | null>(null)
   const [sourceMessage, setSourceMessage] = useState<string | null>(null)
   const [sourceError, setSourceError] = useState<string | null>(null)
-  const sourceCounts = foods.reduce<Record<string, number>>((counts, food) => {
-    for (const source of food.sources ?? []) counts[source] = (counts[source] ?? 0) + 1
-    return counts
-  }, {})
 
   async function runSourceAction(kind: string, payload: Record<string, unknown>, success: string) {
     setSourceBusy(kind)
@@ -1832,8 +1827,8 @@ function NutritionSourcesPanel({
   return (
     <section className="settings-panel nutrition-source-panel">
       <div>
-        <h3>Fuentes nutricionales</h3>
-        <p>{foods.length} alimentos determinísticos disponibles. {sourceSummary(sourceCounts)}</p>
+        <h3>Biblioteca nutricional</h3>
+        <p>Ingredientes, productos importados y alimentos propios para calcular macros del menú.</p>
       </div>
       <details>
         <summary>Importar producto por código de barras</summary>
@@ -1845,7 +1840,7 @@ function NutritionSourcesPanel({
         </div>
       </details>
       <details>
-        <summary>Importar USDA FoodData Central descargado</summary>
+        <summary>Importar base USDA descargada</summary>
         <div className="source-form">
           <label>Ruta o URL ZIP/JSON<input value={usdaPath} placeholder="https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip" onChange={(event) => setUsdaPath(event.target.value)} /></label>
           <div className="source-grid">
@@ -1997,20 +1992,45 @@ function parsePositiveIntegers(value: string): number[] {
     .map((item) => Math.trunc(item))
 }
 
-function sourceSummary(counts: Record<string, number>): string {
-  const entries = Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))
-  if (entries.length === 0) return 'Aún no hay fuentes importadas.'
-  return entries.map(([source, count]) => `${source}: ${count}`).join(' · ')
+function confidenceExplanation(confidence: string): string {
+  if (confidence === 'exact') return 'cantidad verificada'
+  if (confidence === 'barcode') return 'producto importado'
+  if (confidence === 'database') return 'alimento verificado'
+  if (confidence === 'generic') return 'porción aproximada'
+  if (confidence === 'estimated') return 'estimación revisable'
+  if (confidence === 'unknown') return 'pendiente de revisar'
+  return confidence
 }
 
-function confidenceExplanation(confidence: string): string {
-  if (confidence === 'exact') return 'exacto: cantidad en gramos/ml y fuente directa'
-  if (confidence === 'barcode') return 'barcode: datos de producto importado por código de barras'
-  if (confidence === 'database') return 'database: datos determinísticos de fuente nutricional'
-  if (confidence === 'generic') return 'generic: alimento conocido con conversión de porción aproximada'
-  if (confidence === 'estimated') return 'estimated: conversión genérica, revisar si este ingrediente aporta mucho'
-  if (confidence === 'unknown') return 'unknown: falta una fuente determinística; conviene mapear o importar el alimento'
-  return confidence
+function displayProfileName(name: string): string {
+  const normalized = name.trim().toLowerCase()
+  if (!normalized || normalized === 'yo') return 'Usuario'
+  if (normalized.startsWith('benchmark') || normalized.startsWith('walkthrough')) return 'Usuario'
+  return name
+}
+
+function preferenceText(values: string[], fallback: string[]): string {
+  return (values.length > 0 ? values : fallback).map(displayFoodText).join(', ')
+}
+
+function displayFoodText(value: string): string {
+  return value
+    .replace(/\bgreek yogurt\b/gi, 'yogur griego')
+    .replace(/\byogurt\b/gi, 'yogur')
+    .replace(/\boats\b/gi, 'avena')
+    .replace(/\bberries\b/gi, 'frutos rojos')
+    .replace(/\balmonds\b/gi, 'almendras')
+    .replace(/\bbanana\b/gi, 'plátano')
+    .replace(/\bapple\b/gi, 'manzana')
+    .replace(/\bpeanut butter\b/gi, 'crema de cacahuete')
+    .replace(/\bwhole wheat bread\b/gi, 'pan integral')
+    .replace(/\bcottage cheese\b/gi, 'requesón')
+    .replace(/\bmilk\b/gi, 'leche')
+    .replace(/\bcooked rice\b/gi, 'arroz cocido')
+    .replace(/\bcooked quinoa\b/gi, 'quinoa cocida')
+    .replace(/\bbroccoli\b/gi, 'brócoli')
+    .replace(/\bspinach\b/gi, 'espinacas')
+    .replace(/\bcarrot\b/gi, 'zanahoria')
 }
 
 function formatDate(value: string): string {
@@ -2032,6 +2052,14 @@ function jobStatusLabel(status: string): string {
   if (status === 'failed') return 'Falló'
   if (status === 'cancelled') return 'Cancelado'
   return status
+}
+
+function jobActivityText(job: GenerationJob): string {
+  if (job.status === 'running') return 'actualizando menú'
+  if (job.status === 'queued') return 'pendiente'
+  if (job.status === 'completed') return 'listo'
+  if (job.status === 'cancelled') return 'cancelado'
+  return job.logs.length > 0 ? `${job.logs.length} paso(s)` : 'sin cambios'
 }
 
 function jobKindLabel(kind: string): string {
