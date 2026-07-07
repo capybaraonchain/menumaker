@@ -40,7 +40,6 @@
   ·
   <a href="#quick-start">Quick Start</a>
   ·
-  <a href="#portfolio-notes">Portfolio Notes</a>
 </p>
 
 ---
@@ -49,7 +48,7 @@
 
 MenuMaker is a local-first mobile web app for planning weekly diets around a personal profile. It combines LLM-generated meal ideas with deterministic nutrition calculation, ingredient matching, menu scoring, fallback policy controls, and a local Postgres-backed application service.
 
-The project is built as a portfolio-safe snapshot of a real planning system: the LLM proposes recipes, but the app validates ingredients, macros, banned foods, repetition, nutrition confidence, and menu quality before persisting a week.
+The LLM proposes recipes, but the app validates ingredients, macros, banned foods, repetition, nutrition confidence, and menu quality before persisting a week.
 
 <p align="center">
   <img alt="MenuMaker weekly menu overview with macro targets and validated meals" src="assets/screenshots/01-week-overview.png" width="430">
@@ -212,20 +211,6 @@ npm run build
 ```
 
 The test suite covers nutrition scoring, calorie planning, source imports, generation-job behavior, remediation, ownership boundaries, and week-quality checks.
-
-## Portfolio Notes
-
-MenuMaker demonstrates:
-
-- provider-swappable LLM integration with structured output
-- deterministic validation around probabilistic recipe generation
-- local-first product architecture with a clean service boundary
-- Postgres schema design for AI cache, generation jobs, and user-owned data
-- TypeScript monorepo organization across app, domain, data, and AI layers
-- practical MCP tool design for controlled agent operation
-- focused tests around failure modes rather than only happy paths
-
-This public snapshot is meant to show product engineering judgment: the app uses AI where it helps, then validates the result with deterministic code before a user sees or saves a menu.
 
 ## License
 
